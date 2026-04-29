@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
+import { useStudyTracker } from '@/hooks/useStudyTracker';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { BloomLevels } from '@/constants/blooms';
@@ -34,6 +35,7 @@ interface MessageItem {
 }
 
 export default function ChatDetailScreen() {
+  useStudyTracker();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors } = useThemeStore();
   const { profile } = useAuthStore();

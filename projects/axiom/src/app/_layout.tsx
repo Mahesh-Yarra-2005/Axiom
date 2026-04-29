@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { supabase } from '@/lib/supabase';
@@ -66,9 +66,11 @@ export default function RootLayout() {
 
   if (isLoading) {
     return (
-      <View style={[styles.loading, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      <View style={[styles.loading, { backgroundColor: '#000' }]}>
+        <Text style={styles.brandText}>Axiom</Text>
+        <Text style={styles.brandTagline}>Your AI Study Companion</Text>
+        <ActivityIndicator size="small" color="#D4AF37" style={{ marginTop: 24 }} />
+        <StatusBar style="light" />
       </View>
     );
   }
@@ -97,5 +99,16 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  brandText: {
+    fontSize: 42,
+    fontWeight: '700',
+    color: '#D4AF37',
+    letterSpacing: 2,
+  },
+  brandTagline: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    marginTop: 8,
   },
 });

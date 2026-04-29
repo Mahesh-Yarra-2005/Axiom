@@ -13,6 +13,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
 import { supabase } from '@/lib/supabase';
+import { callEdgeFunction } from '@/lib/api';
 
 interface NoteData {
   id: number;
@@ -86,6 +87,7 @@ export default function NoteDetail() {
   const [note, setNote] = useState<NoteData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [generatingFlashcards, setGeneratingFlashcards] = useState(false);
 
   const styles = makeStyles(colors);
 
@@ -129,6 +131,60 @@ export default function NoteDetail() {
         },
       },
     ]);
+  };
+
+  const handleGenerateFlashcards = async () => {
+    if (!note?.content_json) {
+      Alert.alert('Error', 'No content to generate flashcards from');
+      return;
+    }
+
+    setGeneratingFlashcards(true);
+    try {
+      const result = await callEdgeFunction('generate-flashcards', {
+        content: note.content_json,
+        subject: note.subject || '',
+        count: 5,
+      });
+
+      const cards = result.cards;
+      if (!cards || !Array.isArray(cards) || cards.length === 0) {
+        Alert.alert('Error', 'Failed to generate flashcards');
+        return;
+      }
+
+      // Insert cards into flashcards table
+      const flashcardRows = cards.map((card: { front: string; back: string }) => ({
+        student_id: note.id, // will be replaced below
+        question: card.front,
+        answer: card.back,
+        subject: note.subject || '',
+      }));
+
+      // Get student_id from the note's student
+      const { data: noteData } = await supabase
+        .from('notes')
+        .select('student_id')
+        .eq('id', note.id)
+        .single();
+
+      if (noteData?.student_id) {
+        const rows = cards.map((card: { front: string; back: string }) => ({
+          student_id: noteData.student_id,
+          question: card.front,
+          answer: card.back,
+          subject: note.subject || '',
+        }));
+
+        await supabase.from('flashcards').insert(rows);
+      }
+
+      Alert.alert('Success', `Generated ${cards.length} flashcards!`);
+    } catch (e) {
+      Alert.alert('Error', 'Failed to generate flashcards');
+    } finally {
+      setGeneratingFlashcards(false);
+    }
   };
 
   if (loading) {
@@ -211,6 +267,21 @@ export default function NoteDetail() {
             : <Text style={{ color: colors.textSecondary }}>No content</Text>
           }
         </View>
+
+        <TouchableOpacity
+          style={[styles.generateButton, { borderColor: colors.primary + '30' }]}
+          onPress={handleGenerateFlashcards}
+          disabled={generatingFlashcards}
+        >
+          {generatingFlashcards ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Ionicons name="flash-outline" size={20} color={colors.primary} />
+          )}
+          <Text style={[styles.generateText, { color: colors.primary }]}>
+            {generatingFlashcards ? 'Generating...' : 'Generate Flashcards'}
+          </Text>
+        </TouchableOpacity>
 
         <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
           <Ionicons name="trash-outline" size={20} color={colors.error} />
@@ -302,6 +373,20 @@ const makeStyles = (colors: any) =>
       fontSize: 15,
       fontWeight: '500',
       color: colors.error,
+      marginLeft: 8,
+    },
+    generateButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 14,
+      borderRadius: 12,
+      borderWidth: 1,
+      marginBottom: 12,
+    },
+    generateText: {
+      fontSize: 15,
+      fontWeight: '500',
       marginLeft: 8,
     },
   });
