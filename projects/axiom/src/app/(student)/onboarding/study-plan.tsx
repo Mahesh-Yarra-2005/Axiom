@@ -50,7 +50,7 @@ const PLACEHOLDER_PLAN = [
 export default function StudyPlanScreen() {
   const { colors } = useThemeStore();
   const router = useRouter();
-  const { setIsOnboarded, user } = useAuthStore();
+  const { setIsOnboarded, user, session } = useAuthStore();
   const { syllabus_text, exam_type, target_date } = useLocalSearchParams<{
     syllabus_text?: string;
     exam_type?: string;
@@ -76,14 +76,24 @@ export default function StudyPlanScreen() {
         if (result?.plan && Array.isArray(result.plan)) {
           setPlan(result.plan);
 
-          // Save to study_plans table
-          if (user) {
-            await supabase.from('study_plans').insert({
-              user_id: user.id,
-              exam_type: exam_type || null,
-              target_date: target_date || null,
-              plan_data: result.plan,
-            });
+          // Save to study_plans table using correct schema
+          const currentUser = user ?? session?.user;
+          if (currentUser) {
+            // Get student id first
+            const { data: student } = await supabase
+              .from('students')
+              .select('id')
+              .eq('user_id', currentUser.id)
+              .single();
+
+            if (student?.id) {
+              await supabase.from('study_plans').insert({
+                student_id: student.id,
+                title: `${exam_type?.toUpperCase() || 'Study'} Plan`,
+                milestones: result.plan,
+                status: 'active',
+              });
+            }
           }
         }
       } catch (err: any) {
