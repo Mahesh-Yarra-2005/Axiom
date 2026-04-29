@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,34 +6,123 @@ import {
   SafeAreaView,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
 
-const WEEKLY_HOURS = [
-  { day: 'Mon', hours: 3.5 },
-  { day: 'Tue', hours: 4.0 },
-  { day: 'Wed', hours: 2.0 },
-  { day: 'Thu', hours: 5.0 },
-  { day: 'Fri', hours: 3.0 },
-  { day: 'Sat', hours: 1.5 },
-  { day: 'Sun', hours: 2.5 },
-];
+interface StudyGoal {
+  exam_name: string;
+  target_date: string | null;
+  target_score: string | null;
+  progress_pct: number;
+}
 
-const SUBJECT_PROGRESS = [
-  { name: 'Physics', progress: 65, color: '#4A90D9' },
-  { name: 'Chemistry', progress: 40, color: '#7B68EE' },
-  { name: 'Mathematics', progress: 72, color: '#D4AF37' },
-  { name: 'Biology', progress: 55, color: '#50C878' },
-];
+interface DailyEntry {
+  date: string;
+  study_minutes: number;
+}
+
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function GoalsIndex() {
   const { colors } = useThemeStore();
+  const { user } = useAuthStore();
   const router = useRouter();
 
+  const [loading, setLoading] = useState(true);
+  const [goal, setGoal] = useState<StudyGoal | null>(null);
+  const [weeklyData, setWeeklyData] = useState<{ day: string; hours: number }[]>([]);
+  const [daysRemaining, setDaysRemaining] = useState<number | null>(null);
+
   const styles = makeStyles(colors);
-  const maxHours = Math.max(...WEEKLY_HOURS.map((d) => d.hours));
+
+  const fetchData = useCallback(async () => {
+    if (!user) return;
+
+    const { data: student } = await supabase
+      .from('students')
+      .select('id')
+      .eq('user_id', user.id)
+      .single();
+
+    if (!student) {
+      setLoading(false);
+      return;
+    }
+
+    // Fetch active goal
+    const { data: goals } = await supabase
+      .from('study_goals')
+      .select('exam_name, target_date, target_score, progress_pct')
+      .eq('student_id', student.id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (goals && goals.length > 0) {
+      const g = goals[0];
+      setGoal(g);
+      if (g.target_date) {
+        const target = new Date(g.target_date);
+        const now = new Date();
+        const diff = Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        setDaysRemaining(diff > 0 ? diff : 0);
+      }
+    }
+
+    // Fetch last 7 days of daily_progress
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const startDate = sevenDaysAgo.toISOString().split('T')[0];
+
+    const { data: progress } = await supabase
+      .from('daily_progress')
+      .select('date, study_minutes')
+      .eq('student_id', student.id)
+      .gte('date', startDate)
+      .order('date', { ascending: true });
+
+    // Build 7-day array
+    const dayMap: Record<string, number> = {};
+    if (progress) {
+      for (const p of progress) {
+        dayMap[p.date] = p.study_minutes;
+      }
+    }
+
+    const weekly: { day: string; hours: number }[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - 6 + i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayLabel = DAY_LABELS[d.getDay()];
+      const minutes = dayMap[dateStr] || 0;
+      weekly.push({ day: dayLabel, hours: parseFloat((minutes / 60).toFixed(1)) });
+    }
+    setWeeklyData(weekly);
+    setLoading(false);
+  }, [user]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const maxHours = Math.max(...weeklyData.map((d) => d.hours), 1);
+  const totalWeekHours = weeklyData.reduce((acc, d) => acc + d.hours, 0).toFixed(1);
+  const progressPct = goal?.progress_pct ?? 0;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -46,26 +135,46 @@ export default function GoalsIndex() {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Current Goal Card */}
-        <View style={styles.goalCard}>
-          <View style={styles.goalHeader}>
-            <Ionicons name="flag" size={24} color={colors.primary} />
-            <Text style={styles.goalTitle}>JEE Advanced 2025</Text>
+        {goal ? (
+          <View style={styles.goalCard}>
+            <View style={styles.goalHeader}>
+              <Ionicons name="flag" size={24} color={colors.primary} />
+              <Text style={styles.goalTitle}>{goal.exam_name}</Text>
+            </View>
+            {goal.target_date && (
+              <Text style={styles.goalDate}>
+                Target: {new Date(goal.target_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+              </Text>
+            )}
+            {daysRemaining !== null && (
+              <View style={styles.countdownRow}>
+                <Ionicons name="time-outline" size={18} color={colors.warning} />
+                <Text style={styles.countdownText}>{daysRemaining} days left</Text>
+              </View>
+            )}
           </View>
-          <Text style={styles.goalDate}>Target: June 15, 2025</Text>
-          <View style={styles.countdownRow}>
-            <Ionicons name="time-outline" size={18} color={colors.warning} />
-            <Text style={styles.countdownText}>45 days left</Text>
+        ) : (
+          <View style={styles.goalCard}>
+            <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+              <Ionicons name="flag-outline" size={48} color={colors.textSecondary} />
+              <Text style={{ color: colors.text, fontSize: 18, fontWeight: '600', marginTop: 12 }}>
+                Set Your Goal
+              </Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 6, textAlign: 'center' }}>
+                Define your exam target to track progress and stay motivated.
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Progress Circle */}
         <View style={styles.progressCircleCard}>
           <View style={styles.progressCircle}>
-            <Text style={styles.progressPercent}>58%</Text>
+            <Text style={styles.progressPercent}>{Math.round(progressPct)}%</Text>
             <Text style={styles.progressLabel}>Overall</Text>
           </View>
           <Text style={styles.progressDescription}>
-            You've completed 58% of your study plan
+            You've completed {Math.round(progressPct)}% of your study plan
           </Text>
         </View>
 
@@ -74,7 +183,7 @@ export default function GoalsIndex() {
           <Text style={styles.sectionTitle}>Weekly Study Hours</Text>
           <View style={styles.chartCard}>
             <View style={styles.chart}>
-              {WEEKLY_HOURS.map((item) => (
+              {weeklyData.map((item) => (
                 <View key={item.day} style={styles.chartColumn}>
                   <View style={styles.barContainer}>
                     <View
@@ -94,32 +203,9 @@ export default function GoalsIndex() {
             </View>
             <View style={styles.chartTotal}>
               <Text style={styles.chartTotalLabel}>Total this week</Text>
-              <Text style={styles.chartTotalValue}>
-                {WEEKLY_HOURS.reduce((acc, d) => acc + d.hours, 0).toFixed(1)}h
-              </Text>
+              <Text style={styles.chartTotalValue}>{totalWeekHours}h</Text>
             </View>
           </View>
-        </View>
-
-        {/* Subject Progress */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Subject Progress</Text>
-          {SUBJECT_PROGRESS.map((subject) => (
-            <View key={subject.name} style={styles.subjectRow}>
-              <View style={styles.subjectHeader}>
-                <Text style={styles.subjectName}>{subject.name}</Text>
-                <Text style={styles.subjectPercent}>{subject.progress}%</Text>
-              </View>
-              <View style={styles.subjectBarBg}>
-                <View
-                  style={[
-                    styles.subjectBarFill,
-                    { width: `${subject.progress}%`, backgroundColor: subject.color },
-                  ]}
-                />
-              </View>
-            </View>
-          ))}
         </View>
 
         {/* Update Goal Button */}
@@ -290,34 +376,6 @@ const makeStyles = (colors: any) =>
       fontSize: 16,
       fontWeight: '700',
       color: colors.primary,
-    },
-    subjectRow: {
-      marginBottom: 16,
-    },
-    subjectHeader: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      marginBottom: 6,
-    },
-    subjectName: {
-      fontSize: 15,
-      color: colors.text,
-      fontWeight: '500',
-    },
-    subjectPercent: {
-      fontSize: 14,
-      color: colors.textSecondary,
-      fontWeight: '600',
-    },
-    subjectBarBg: {
-      height: 10,
-      backgroundColor: colors.border,
-      borderRadius: 5,
-      overflow: 'hidden',
-    },
-    subjectBarFill: {
-      height: '100%',
-      borderRadius: 5,
     },
     updateButton: {
       flexDirection: 'row',

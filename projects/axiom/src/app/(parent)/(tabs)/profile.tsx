@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,20 +6,105 @@ import {
   SafeAreaView,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
 
-const LINKED_CHILDREN = [
-  { id: '1', name: 'Arjun Sharma', exam: 'JEE Advanced 2025' },
-  { id: '2', name: 'Priya Sharma', exam: 'NEET 2025' },
-];
+interface LinkedChild {
+  id: string;
+  name: string;
+  exam: string;
+}
 
 export default function ParentProfile() {
   const { colors, toggleTheme, scheme } = useThemeStore();
   const isDark = scheme === 'dark';
   const router = useRouter();
+  const { user, profile } = useAuthStore();
+
+  const [linkedChildren, setLinkedChildren] = useState<LinkedChild[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fullName = profile?.full_name || user?.email || 'Parent';
+  const email = user?.email || '';
+  const initials = fullName
+    .split(' ')
+    .map((n: string) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+
+  useEffect(() => {
+    async function fetchLinkedChildren() {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data: parent } = await supabase
+          .from('parents')
+          .select('id')
+          .eq('user_id', user.id)
+          .single();
+
+        if (!parent) {
+          setLoading(false);
+          return;
+        }
+
+        const { data: links } = await supabase
+          .from('parent_student_links')
+          .select(`
+            student_id,
+            students (
+              id,
+              exam_type,
+              target_date,
+              users (
+                full_name,
+                email
+              )
+            )
+          `)
+          .eq('parent_id', parent.id);
+
+        if (links) {
+          const children: LinkedChild[] = links.map((link: any) => {
+            const student = link.students;
+            const userInfo = student?.users;
+            const name = userInfo?.full_name || userInfo?.email || 'Unknown';
+            const examType = student?.exam_type || '';
+            const targetYear = student?.target_date
+              ? new Date(student.target_date).getFullYear()
+              : '';
+            const exam = examType ? `${examType}${targetYear ? ' ' + targetYear : ''}` : 'No exam set';
+
+            return {
+              id: String(student?.id),
+              name,
+              exam,
+            };
+          });
+          setLinkedChildren(children);
+        }
+      } catch (err) {
+        console.error('Error fetching linked children:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchLinkedChildren();
+  }, [user?.id]);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
 
   const styles = makeStyles(colors);
 
@@ -30,32 +115,40 @@ export default function ParentProfile() {
 
         <View style={styles.avatarSection}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>RS</Text>
+            <Text style={styles.avatarText}>{initials}</Text>
           </View>
-          <Text style={styles.name}>Rajesh Sharma</Text>
-          <Text style={styles.email}>rajesh.sharma@email.com</Text>
+          <Text style={styles.name}>{fullName}</Text>
+          <Text style={styles.email}>{email}</Text>
         </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Linked Children</Text>
-          {LINKED_CHILDREN.map((child) => (
-            <TouchableOpacity
-              key={child.id}
-              style={styles.childRow}
-              onPress={() => router.push(`/(parent)/child/${child.id}`)}
-            >
-              <View style={styles.childAvatar}>
-                <Text style={styles.childAvatarText}>
-                  {child.name.split(' ').map((n) => n[0]).join('')}
-                </Text>
-              </View>
-              <View style={styles.childInfo}>
-                <Text style={styles.childName}>{child.name}</Text>
-                <Text style={styles.childExam}>{child.exam}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
-          ))}
+          {loading ? (
+            <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 16 }} />
+          ) : linkedChildren.length === 0 ? (
+            <View style={[styles.childRow, { justifyContent: 'center' }]}>
+              <Text style={styles.childExam}>No children linked yet</Text>
+            </View>
+          ) : (
+            linkedChildren.map((child) => (
+              <TouchableOpacity
+                key={child.id}
+                style={styles.childRow}
+                onPress={() => router.push(`/(parent)/child/${child.id}`)}
+              >
+                <View style={styles.childAvatar}>
+                  <Text style={styles.childAvatarText}>
+                    {child.name.split(' ').map((n) => n[0]).join('')}
+                  </Text>
+                </View>
+                <View style={styles.childInfo}>
+                  <Text style={styles.childName}>{child.name}</Text>
+                  <Text style={styles.childExam}>{child.exam}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            ))
+          )}
         </View>
 
         <View style={styles.section}>
@@ -87,7 +180,7 @@ export default function ParentProfile() {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.signOutButton}>
+        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
           <Ionicons name="log-out-outline" size={22} color={colors.error} />
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>

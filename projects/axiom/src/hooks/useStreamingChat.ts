@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import { streamEdgeFunction } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
 export function useStreamingChat() {
   const { setIsStreaming, setStreamingText, appendStreamingText, addMessage, setSuggestions } = useChatStore();
@@ -12,6 +13,16 @@ export function useStreamingChat() {
     setIsStreaming(true);
     setStreamingText('');
     setSuggestions([]);
+
+    // Save user message to DB (last message in array is the new one)
+    const userMsg = messages[messages.length - 1];
+    if (conversationId && conversationId !== 'new') {
+      supabase.from('messages').insert({
+        conversation_id: parseInt(conversationId),
+        role: userMsg.role,
+        content: userMsg.content,
+      }).then();
+    }
 
     try {
       const fullText = await streamEdgeFunction('chat', {
@@ -43,6 +54,21 @@ export function useStreamingChat() {
         blooms_level: null,
         created_at: new Date().toISOString(),
       });
+
+      // Save assistant message to DB
+      if (conversationId && conversationId !== 'new') {
+        supabase.from('messages').insert({
+          conversation_id: parseInt(conversationId),
+          role: 'assistant',
+          content: cleanContent,
+        }).then();
+
+        // Update conversation title if it's the first exchange
+        if (messages.length <= 2) {
+          const title = userMsg.content.slice(0, 50) + (userMsg.content.length > 50 ? '...' : '');
+          supabase.from('conversations').update({ title }).eq('id', parseInt(conversationId)).then();
+        }
+      }
 
       return cleanContent;
     } catch (error) {

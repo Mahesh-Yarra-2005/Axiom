@@ -1,57 +1,104 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   SafeAreaView,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
+import { sm2, Quality } from '@/lib/spaced-repetition';
 
-const FLASHCARDS = [
-  {
-    id: '1',
-    front: 'What is the moment of inertia of a solid sphere about its diameter?',
-    back: 'I = (2/5)MR²\n\nWhere M is the mass and R is the radius of the sphere.',
-  },
-  {
-    id: '2',
-    front: 'State the parallel axis theorem.',
-    back: 'I = I_cm + Md²\n\nWhere I_cm is the moment of inertia about the center of mass, M is the total mass, and d is the distance between the two parallel axes.',
-  },
-  {
-    id: '3',
-    front: 'What is the relationship between torque and angular acceleration?',
-    back: 'τ = Iα\n\nTorque equals moment of inertia times angular acceleration. This is the rotational analog of F = ma.',
-  },
-  {
-    id: '4',
-    front: 'Define angular momentum and state its SI unit.',
-    back: 'Angular momentum (L) = Iω = r × p\n\nSI unit: kg·m²/s\n\nIt is conserved when net external torque is zero.',
-  },
-  {
-    id: '5',
-    front: 'What is the condition for pure rolling without slipping?',
-    back: 'v_cm = Rω\n\nThe velocity of the center of mass equals the radius times the angular velocity. Also, the point of contact has zero velocity relative to the surface.',
-  },
-];
+interface FlashcardRow {
+  id: number;
+  front: string;
+  back: string;
+  ease_factor: number;
+  interval: number;
+  repetitions: number;
+  next_review: string | null;
+}
 
 export default function FlashcardStudy() {
   const { colors } = useThemeStore();
+  const { user } = useAuthStore();
   const router = useRouter();
+  const { subject } = useLocalSearchParams<{ subject: string }>();
+
+  const [cards, setCards] = useState<FlashcardRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [completed, setCompleted] = useState(false);
-  const [ratings, setRatings] = useState<Record<string, string>>({});
+  const [ratings, setRatings] = useState<Record<number, string>>({});
+  const [updating, setUpdating] = useState(false);
 
   const styles = makeStyles(colors);
-  const currentCard = FLASHCARDS[currentIndex];
 
-  const handleRate = (rating: string) => {
-    setRatings({ ...ratings, [currentCard.id]: rating });
-    if (currentIndex < FLASHCARDS.length - 1) {
+  const fetchCards = useCallback(async () => {
+    if (!user) return;
+    const { data: student } = await supabase
+      .from('students')
+      .select('id')
+      .eq('user_id', user.id)
+      .single();
+
+    if (!student) {
+      setLoading(false);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('flashcards')
+      .select('id, front, back, ease_factor, interval, repetitions, next_review')
+      .eq('student_id', student.id)
+      .eq('subject', subject || '')
+      .or(`next_review.lte.${now},next_review.is.null`);
+
+    if (!error && data) {
+      setCards(data);
+    }
+    setLoading(false);
+  }, [user, subject]);
+
+  useEffect(() => {
+    fetchCards();
+  }, [fetchCards]);
+
+  const handleRate = async (label: string, quality: Quality) => {
+    const card = cards[currentIndex];
+    setUpdating(true);
+    setRatings({ ...ratings, [card.id]: label });
+
+    const updated = sm2(
+      {
+        ease_factor: card.ease_factor,
+        interval: card.interval,
+        repetitions: card.repetitions,
+        next_review: card.next_review || new Date().toISOString(),
+      },
+      quality
+    );
+
+    await supabase
+      .from('flashcards')
+      .update({
+        ease_factor: updated.ease_factor,
+        interval: updated.interval,
+        repetitions: updated.repetitions,
+        next_review: updated.next_review,
+      })
+      .eq('id', card.id);
+
+    setUpdating(false);
+
+    if (currentIndex < cards.length - 1) {
       setCurrentIndex(currentIndex + 1);
       setIsFlipped(false);
     } else {
@@ -59,8 +106,43 @@ export default function FlashcardStudy() {
     }
   };
 
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (cards.length === 0 && !completed) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Study Session</Text>
+        </View>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <Ionicons name="checkmark-circle-outline" size={64} color={colors.success} />
+          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '600', marginTop: 16 }}>
+            All caught up!
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 8, textAlign: 'center' }}>
+            No cards due for review in {subject || 'this deck'}.
+          </Text>
+          <TouchableOpacity style={styles.doneButton} onPress={() => router.back()}>
+            <Text style={styles.doneButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (completed) {
-    const total = FLASHCARDS.length;
+    const total = cards.length;
     const easy = Object.values(ratings).filter((r) => r === 'easy' || r === 'good').length;
 
     return (
@@ -102,6 +184,8 @@ export default function FlashcardStudy() {
     );
   }
 
+  const currentCard = cards[currentIndex];
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -113,7 +197,7 @@ export default function FlashcardStudy() {
 
       <View style={styles.content}>
         <Text style={styles.progress}>
-          Card {currentIndex + 1} of {FLASHCARDS.length}
+          Card {currentIndex + 1} of {cards.length}
         </Text>
 
         {/* Flashcard */}
@@ -140,25 +224,29 @@ export default function FlashcardStudy() {
           <View style={styles.ratingRow}>
             <TouchableOpacity
               style={[styles.ratingButton, { backgroundColor: colors.error + '20', borderColor: colors.error }]}
-              onPress={() => handleRate('again')}
+              onPress={() => handleRate('again', 1 as Quality)}
+              disabled={updating}
             >
               <Text style={[styles.ratingText, { color: colors.error }]}>Again</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.ratingButton, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}
-              onPress={() => handleRate('hard')}
+              onPress={() => handleRate('hard', 2 as Quality)}
+              disabled={updating}
             >
               <Text style={[styles.ratingText, { color: colors.warning }]}>Hard</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.ratingButton, { backgroundColor: colors.success + '20', borderColor: colors.success }]}
-              onPress={() => handleRate('good')}
+              onPress={() => handleRate('good', 4 as Quality)}
+              disabled={updating}
             >
               <Text style={[styles.ratingText, { color: colors.success }]}>Good</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.ratingButton, { backgroundColor: colors.primary + '20', borderColor: colors.primary }]}
-              onPress={() => handleRate('easy')}
+              onPress={() => handleRate('easy', 5 as Quality)}
+              disabled={updating}
             >
               <Text style={[styles.ratingText, { color: colors.primary }]}>Easy</Text>
             </TouchableOpacity>
@@ -316,6 +404,7 @@ const makeStyles = (colors: any) =>
       paddingHorizontal: 48,
       paddingVertical: 14,
       borderRadius: 12,
+      marginTop: 24,
     },
     doneButtonText: {
       fontSize: 16,

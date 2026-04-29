@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,51 +6,129 @@ import {
   SafeAreaView,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
+  Alert,
+  TextInput,
+  Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
 
-const DECKS = [
-  {
-    id: '1',
-    subject: 'Physics',
-    topic: 'Mechanics',
-    totalCards: 25,
-    dueToday: 8,
-    progress: 60,
-  },
-  {
-    id: '2',
-    subject: 'Chemistry',
-    topic: 'Organic Reactions',
-    totalCards: 30,
-    dueToday: 5,
-    progress: 45,
-  },
-  {
-    id: '3',
-    subject: 'Mathematics',
-    topic: 'Calculus',
-    totalCards: 20,
-    dueToday: 12,
-    progress: 35,
-  },
-  {
-    id: '4',
-    subject: 'Biology',
-    topic: 'Cell Biology',
-    totalCards: 18,
-    dueToday: 3,
-    progress: 78,
-  },
-];
+interface DeckSummary {
+  subject: string;
+  totalCards: number;
+  dueToday: number;
+  mastered: number;
+  progress: number;
+}
 
 export default function FlashcardsIndex() {
   const { colors } = useThemeStore();
+  const { user } = useAuthStore();
   const router = useRouter();
 
+  const [decks, setDecks] = useState<DeckSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [studentId, setStudentId] = useState<number | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newSubject, setNewSubject] = useState('');
+  const [newFront, setNewFront] = useState('');
+  const [newBack, setNewBack] = useState('');
+  const [creating, setCreating] = useState(false);
+
   const styles = makeStyles(colors);
+
+  const fetchStudentId = useCallback(async () => {
+    if (!user) return null;
+    const { data } = await supabase
+      .from('students')
+      .select('id')
+      .eq('user_id', user.id)
+      .single();
+    return data?.id ?? null;
+  }, [user]);
+
+  const fetchDecks = useCallback(async (sid: number) => {
+    const now = new Date().toISOString();
+    const { data: cards, error } = await supabase
+      .from('flashcards')
+      .select('subject, ease_factor, interval, repetitions, next_review')
+      .eq('student_id', sid);
+
+    if (error || !cards) return;
+
+    const grouped: Record<string, typeof cards> = {};
+    for (const card of cards) {
+      const subj = card.subject || 'General';
+      if (!grouped[subj]) grouped[subj] = [];
+      grouped[subj].push(card);
+    }
+
+    const summaries: DeckSummary[] = Object.entries(grouped).map(([subject, items]) => {
+      const totalCards = items.length;
+      const dueToday = items.filter(
+        (c) => !c.next_review || c.next_review <= now
+      ).length;
+      const mastered = items.filter(
+        (c) => c.ease_factor >= 2.5 && c.repetitions >= 3
+      ).length;
+      const progress = totalCards > 0 ? Math.round((mastered / totalCards) * 100) : 0;
+      return { subject, totalCards, dueToday, mastered, progress };
+    });
+
+    setDecks(summaries);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const sid = await fetchStudentId();
+      if (!mounted) return;
+      if (sid) {
+        setStudentId(sid);
+        await fetchDecks(sid);
+      }
+      setLoading(false);
+    })();
+    return () => { mounted = false; };
+  }, [fetchStudentId, fetchDecks]);
+
+  const handleCreateCard = async () => {
+    if (!studentId || !newSubject.trim() || !newFront.trim() || !newBack.trim()) {
+      Alert.alert('Missing fields', 'Please fill in subject, front, and back.');
+      return;
+    }
+    setCreating(true);
+    const { error } = await supabase.from('flashcards').insert({
+      student_id: studentId,
+      subject: newSubject.trim(),
+      front: newFront.trim(),
+      back: newBack.trim(),
+    });
+    setCreating(false);
+    if (error) {
+      Alert.alert('Error', error.message);
+      return;
+    }
+    setNewSubject('');
+    setNewFront('');
+    setNewBack('');
+    setShowCreateModal(false);
+    await fetchDecks(studentId);
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -62,11 +140,27 @@ export default function FlashcardsIndex() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {DECKS.map((deck) => (
+        {decks.length === 0 && (
+          <View style={{ alignItems: 'center', marginTop: 60 }}>
+            <Ionicons name="albums-outline" size={64} color={colors.textSecondary} />
+            <Text style={{ color: colors.textSecondary, fontSize: 16, marginTop: 12 }}>
+              No flashcards yet
+            </Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 4 }}>
+              Tap + to create your first card
+            </Text>
+          </View>
+        )}
+        {decks.map((deck) => (
           <TouchableOpacity
-            key={deck.id}
+            key={deck.subject}
             style={styles.deckCard}
-            onPress={() => router.push('/(student)/flashcards/study')}
+            onPress={() =>
+              router.push({
+                pathname: '/(student)/flashcards/study',
+                params: { subject: deck.subject },
+              })
+            }
             activeOpacity={0.7}
           >
             <View style={styles.deckHeader}>
@@ -80,9 +174,7 @@ export default function FlashcardsIndex() {
               )}
             </View>
 
-            <Text style={styles.deckTopic}>
-              {deck.subject} — {deck.topic}
-            </Text>
+            <Text style={styles.deckTopic}>{deck.subject}</Text>
             <Text style={styles.deckMeta}>
               {deck.totalCards} cards · {deck.dueToday} due today
             </Text>
@@ -98,9 +190,65 @@ export default function FlashcardsIndex() {
       </ScrollView>
 
       {/* FAB */}
-      <TouchableOpacity style={[styles.fab, { backgroundColor: colors.primary }]}>
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: colors.primary }]}
+        onPress={() => setShowCreateModal(true)}
+      >
         <Ionicons name="add" size={28} color="#000" />
       </TouchableOpacity>
+
+      {/* Create Card Modal */}
+      <Modal visible={showCreateModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>New Flashcard</Text>
+
+            <TextInput
+              style={[styles.input, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Subject (e.g. Physics)"
+              placeholderTextColor={colors.textSecondary}
+              value={newSubject}
+              onChangeText={setNewSubject}
+            />
+            <TextInput
+              style={[styles.input, styles.inputMultiline, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Front (question)"
+              placeholderTextColor={colors.textSecondary}
+              value={newFront}
+              onChangeText={setNewFront}
+              multiline
+            />
+            <TextInput
+              style={[styles.input, styles.inputMultiline, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Back (answer)"
+              placeholderTextColor={colors.textSecondary}
+              value={newBack}
+              onChangeText={setNewBack}
+              multiline
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: colors.border }]}
+                onPress={() => setShowCreateModal(false)}
+              >
+                <Text style={{ color: colors.text, fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: colors.primary }]}
+                onPress={handleCreateCard}
+                disabled={creating}
+              >
+                {creating ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <Text style={{ color: '#000', fontWeight: '600' }}>Create</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -209,5 +357,45 @@ const makeStyles = (colors: any) =>
       shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.3,
       shadowRadius: 4,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      justifyContent: 'center',
+      padding: 24,
+    },
+    modalContent: {
+      borderRadius: 16,
+      padding: 24,
+    },
+    modalTitle: {
+      fontSize: 20,
+      fontWeight: '700',
+      marginBottom: 16,
+    },
+    input: {
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 15,
+      marginBottom: 12,
+    },
+    inputMultiline: {
+      minHeight: 80,
+      textAlignVertical: 'top',
+    },
+    modalButtons: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: 12,
+      marginTop: 8,
+    },
+    modalBtn: {
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
   });

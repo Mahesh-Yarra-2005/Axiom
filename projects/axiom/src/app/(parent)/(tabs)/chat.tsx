@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
+import { streamEdgeFunction } from '@/lib/api';
 
 interface Message {
   id: string;
@@ -20,45 +24,190 @@ interface Message {
   timestamp: string;
 }
 
-const INITIAL_MESSAGES: Message[] = [
-  {
-    id: '1',
-    text: "Hello! I'm your parenting advisor. I can help you understand your child's study progress, suggest schedules, and provide advice on exam stress management.",
-    isUser: false,
-    timestamp: '10:00 AM',
-  },
-  {
-    id: '2',
-    text: "How is Arjun doing with his JEE preparation this week?",
-    isUser: true,
-    timestamp: '10:01 AM',
-  },
-  {
-    id: '3',
-    text: "Arjun has been doing well this week! He completed 12 hours of study, focusing mainly on Physics (Mechanics) and Chemistry (Organic). His quiz scores have improved by 8% compared to last week. I'd suggest encouraging him to spend a bit more time on Mathematics, specifically Calculus, as that area could use more attention.",
-    isUser: false,
-    timestamp: '10:01 AM',
-  },
-];
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
+  text: "Hello! I'm your parenting advisor. I can help you understand your child's study progress, suggest schedules, and provide advice on exam stress management.",
+  isUser: false,
+  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+};
 
 export default function ParentChat() {
   const { colors } = useThemeStore();
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
+  const { user } = useAuthStore();
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [inputText, setInputText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [streaming, setStreaming] = useState(false);
+  const [conversationId, setConversationId] = useState<number | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
 
   const styles = makeStyles(colors);
 
-  const handleSend = () => {
-    if (!inputText.trim()) return;
-    const newMessage: Message = {
+  // Load existing conversation on mount
+  useEffect(() => {
+    async function loadConversation() {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        // Get parent record to find linked students
+        const { data: parent } = await supabase
+          .from('parents')
+          .select('id')
+          .eq('user_id', user.id)
+          .single();
+
+        if (!parent) {
+          setLoading(false);
+          return;
+        }
+
+        // Look for an existing parent conversation
+        // We use a convention: conversations with title 'parent_chat' and student_id
+        // from one of the linked students. For parent chats, we'll use the first linked student.
+        const { data: links } = await supabase
+          .from('parent_student_links')
+          .select('student_id')
+          .eq('parent_id', parent.id)
+          .limit(1);
+
+        if (!links || links.length === 0) {
+          setLoading(false);
+          return;
+        }
+
+        const studentId = links[0].student_id;
+
+        // Check for existing parent conversation
+        const { data: conversation } = await supabase
+          .from('conversations')
+          .select('id')
+          .eq('student_id', studentId)
+          .eq('title', 'parent_chat')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (conversation) {
+          setConversationId(conversation.id);
+
+          // Load messages
+          const { data: dbMessages } = await supabase
+            .from('messages')
+            .select('id, role, content, created_at')
+            .eq('conversation_id', conversation.id)
+            .order('created_at', { ascending: true });
+
+          if (dbMessages && dbMessages.length > 0) {
+            const loadedMessages: Message[] = dbMessages.map((msg: any) => ({
+              id: String(msg.id),
+              text: msg.content,
+              isUser: msg.role === 'user',
+              timestamp: new Date(msg.created_at).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+            }));
+            setMessages(loadedMessages);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading conversation:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadConversation();
+  }, [user?.id]);
+
+  const handleSend = async () => {
+    if (!inputText.trim() || streaming) return;
+
+    const userMessage: Message = {
       id: Date.now().toString(),
       text: inputText.trim(),
       isUser: true,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-    setMessages((prev) => [...prev, newMessage]);
+
+    setMessages((prev) => [...prev, userMessage]);
+    const messageText = inputText.trim();
     setInputText('');
+    setStreaming(true);
+
+    // Create a placeholder for AI response
+    const aiMessageId = (Date.now() + 1).toString();
+    const aiMessage: Message = {
+      id: aiMessageId,
+      text: '',
+      isUser: false,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setMessages((prev) => [...prev, aiMessage]);
+
+    try {
+      // Build conversation history for context
+      const history = messages
+        .filter((m) => m.id !== 'welcome')
+        .map((m) => ({
+          role: m.isUser ? 'user' : 'assistant',
+          content: m.text,
+        }));
+
+      history.push({ role: 'user', content: messageText });
+
+      const fullText = await streamEdgeFunction(
+        'parent-chat',
+        {
+          messages: history,
+          conversation_id: conversationId,
+          user_id: user?.id,
+        },
+        (chunk: string) => {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMessageId ? { ...msg, text: msg.text + chunk } : msg
+            )
+          );
+        }
+      );
+
+      // Update the final message text
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === aiMessageId ? { ...msg, text: fullText } : msg
+        )
+      );
+    } catch (err) {
+      console.error('Chat error:', err);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === aiMessageId
+            ? { ...msg, text: 'Sorry, I encountered an error. Please try again.' }
+            : msg
+        )
+      );
+    } finally {
+      setStreaming(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <Ionicons name="chatbubbles" size={24} color={colors.primary} />
+          <Text style={styles.headerTitle}>Parent Advisor</Text>
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -73,8 +222,10 @@ export default function ParentChat() {
         keyboardVerticalOffset={90}
       >
         <ScrollView
+          ref={scrollViewRef}
           style={styles.messagesList}
           contentContainerStyle={styles.messagesContent}
+          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
         >
           {messages.map((message) => (
             <View
@@ -107,6 +258,9 @@ export default function ParentChat() {
               </Text>
             </View>
           ))}
+          {streaming && messages[messages.length - 1]?.text === '' && (
+            <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
+          )}
         </ScrollView>
 
         <View style={styles.inputBar}>
@@ -117,14 +271,15 @@ export default function ParentChat() {
             placeholder="Ask about your child's progress..."
             placeholderTextColor={colors.textSecondary}
             multiline
+            editable={!streaming}
           />
           <TouchableOpacity
             style={[
               styles.sendButton,
-              { opacity: inputText.trim() ? 1 : 0.5 },
+              { opacity: inputText.trim() && !streaming ? 1 : 0.5 },
             ]}
             onPress={handleSend}
-            disabled={!inputText.trim()}
+            disabled={!inputText.trim() || streaming}
           >
             <Ionicons name="send" size={20} color="#000" />
           </TouchableOpacity>

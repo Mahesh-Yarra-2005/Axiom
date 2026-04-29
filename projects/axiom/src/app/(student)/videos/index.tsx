@@ -6,12 +6,13 @@ import {
   SafeAreaView,
   TouchableOpacity,
   TextInput,
-  FlatList,
+  ActivityIndicator,
   StyleSheet,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { callEdgeFunction } from '@/lib/api';
 
 const PEER_PICKS = [
   { id: 'v1', title: 'Rotational Mechanics Explained', channel: 'Physics Wallah', duration: '32:15' },
@@ -19,35 +20,58 @@ const PEER_PICKS = [
   { id: 'v3', title: 'Calculus Made Easy', channel: 'Khan Academy', duration: '28:40' },
 ];
 
-const ALL_VIDEOS = [
-  { id: 'v1', title: 'Rotational Mechanics Explained', channel: 'Physics Wallah', duration: '32:15', subject: 'Physics' },
-  { id: 'v2', title: 'Organic Chemistry — Reaction Mechanisms', channel: 'Unacademy', duration: '45:20', subject: 'Chemistry' },
-  { id: 'v3', title: 'Calculus — Integration by Parts', channel: 'Khan Academy', duration: '28:40', subject: 'Mathematics' },
-  { id: 'v4', title: 'Electromagnetic Induction', channel: 'Physics Wallah', duration: '38:10', subject: 'Physics' },
-  { id: 'v5', title: 'Chemical Bonding & Molecular Structure', channel: 'Vedantu', duration: '52:30', subject: 'Chemistry' },
-  { id: 'v6', title: 'Cell Division — Mitosis & Meiosis', channel: 'BYJU\'S', duration: '25:45', subject: 'Biology' },
-];
+interface VideoResult {
+  id: string;
+  title: string;
+  description?: string;
+  channel: string;
+  thumbnail?: string;
+  published_at?: string;
+}
 
 export default function VideosIndex() {
   const { colors } = useThemeStore();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<VideoResult[] | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const styles = makeStyles(colors);
 
-  const filteredVideos = searchQuery.trim()
-    ? ALL_VIDEOS.filter(
-        (v) =>
-          v.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          v.subject.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : ALL_VIDEOS;
+  const handleSearch = async () => {
+    const query = searchQuery.trim();
+    if (!query) return;
 
-  const renderVideoCard = (video: typeof ALL_VIDEOS[0], compact = false) => (
+    setIsSearching(true);
+    setSearchError(null);
+    try {
+      const data = await callEdgeFunction('search-videos', { query, subject: '' });
+      setSearchResults(data.videos || []);
+    } catch (err: any) {
+      setSearchError(err.message || 'Search failed');
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults(null);
+    setSearchError(null);
+  };
+
+  const renderVideoCard = (video: VideoResult, compact = false) => (
     <TouchableOpacity
       key={video.id}
       style={compact ? styles.peerCard : styles.videoCard}
-      onPress={() => router.push(`/(student)/videos/${video.id}`)}
+      onPress={() =>
+        router.push({
+          pathname: '/(student)/videos/[id]',
+          params: { id: video.id, title: video.title, channel: video.channel, thumbnail: video.thumbnail || '' },
+        })
+      }
       activeOpacity={0.7}
     >
       <View style={compact ? styles.peerThumbnail : styles.thumbnail}>
@@ -58,7 +82,6 @@ export default function VideosIndex() {
           {video.title}
         </Text>
         <Text style={styles.videoChannel}>{video.channel}</Text>
-        <Text style={styles.videoDuration}>{video.duration}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -82,38 +105,56 @@ export default function VideosIndex() {
             onChangeText={setSearchQuery}
             placeholder="Search videos by topic or subject..."
             placeholderTextColor={colors.textSecondary}
+            onSubmitEditing={handleSearch}
+            returnKeyType="search"
           />
           {searchQuery ? (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <TouchableOpacity onPress={clearSearch}>
               <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           ) : null}
         </View>
 
-        {/* Peer Picks */}
-        {!searchQuery && (
+        {/* Loading */}
+        {isSearching && (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.emptyText}>Searching...</Text>
+          </View>
+        )}
+
+        {/* Error */}
+        {searchError && !isSearching && (
+          <View style={styles.emptyState}>
+            <Ionicons name="alert-circle-outline" size={48} color={colors.error || colors.textSecondary} />
+            <Text style={styles.emptyText}>{searchError}</Text>
+          </View>
+        )}
+
+        {/* Peer Picks — show when no search is active */}
+        {!searchResults && !isSearching && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Peer Picks</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {PEER_PICKS.map((video) => renderVideoCard(video as any, true))}
+              {PEER_PICKS.map((video) => renderVideoCard(video as VideoResult, true))}
             </ScrollView>
           </View>
         )}
 
-        {/* All Videos / Search Results */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            {searchQuery ? 'Search Results' : 'All Videos'}
-          </Text>
-          {filteredVideos.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="videocam-off-outline" size={48} color={colors.textSecondary} />
-              <Text style={styles.emptyText}>No videos found</Text>
-            </View>
-          ) : (
-            filteredVideos.map((video) => renderVideoCard(video))
-          )}
-        </View>
+        {/* Search Results */}
+        {searchResults && !isSearching && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Search Results</Text>
+            {searchResults.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="videocam-off-outline" size={48} color={colors.textSecondary} />
+                <Text style={styles.emptyText}>No videos found</Text>
+              </View>
+            ) : (
+              searchResults.map((video) => renderVideoCard(video))
+            )}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -221,11 +262,6 @@ const makeStyles = (colors: any) =>
       fontSize: 12,
       color: colors.textSecondary,
       marginBottom: 2,
-    },
-    videoDuration: {
-      fontSize: 12,
-      color: colors.primary,
-      fontWeight: '500',
     },
     emptyState: {
       alignItems: 'center',

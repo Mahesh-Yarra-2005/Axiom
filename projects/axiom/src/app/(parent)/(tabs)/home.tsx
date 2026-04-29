@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,56 +7,254 @@ import {
   TouchableOpacity,
   TextInput,
   StyleSheet,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
 
-const CHILDREN_DATA = [
-  {
-    id: '1',
-    name: 'Arjun Sharma',
-    initials: 'AS',
-    studyHours: 12,
-    progress: 68,
-    lastActive: '2 hours ago',
-    status: 'On Track',
-    statusColor: 'success',
-  },
-  {
-    id: '2',
-    name: 'Priya Sharma',
-    initials: 'PS',
-    studyHours: 8,
-    progress: 45,
-    lastActive: '5 hours ago',
-    status: 'Needs Attention',
-    statusColor: 'warning',
-  },
-];
+interface ChildData {
+  id: string;
+  name: string;
+  initials: string;
+  studyHours: number;
+  progress: number;
+  lastActive: string;
+  status: string;
+  statusColor: string;
+}
 
 export default function ParentHome() {
   const { colors } = useThemeStore();
+  const { user } = useAuthStore();
   const router = useRouter();
   const [inviteCode, setInviteCode] = useState('');
   const [showLinkInput, setShowLinkInput] = useState(false);
+  const [children, setChildren] = useState<ChildData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [linking, setLinking] = useState(false);
 
   const styles = makeStyles(colors);
 
-  const handleLinkChild = () => {
-    if (inviteCode.trim()) {
-      // TODO: query students table by invite_code, create parent_student_link
+  const fetchChildren = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      // Get parent record
+      const { data: parent, error: parentError } = await supabase
+        .from('parents')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (parentError || !parent) {
+        setLoading(false);
+        return;
+      }
+
+      // Get linked students with user info
+      const { data: links, error: linksError } = await supabase
+        .from('parent_student_links')
+        .select(`
+          student_id,
+          students (
+            id,
+            exam_type,
+            target_date,
+            user_id,
+            users (
+              full_name,
+              email
+            )
+          )
+        `)
+        .eq('parent_id', parent.id);
+
+      if (linksError || !links) {
+        setLoading(false);
+        return;
+      }
+
+      // For each child, fetch recent daily_progress (last 7 days)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const dateStr = sevenDaysAgo.toISOString().split('T')[0];
+
+      const childrenData: ChildData[] = await Promise.all(
+        links.map(async (link: any) => {
+          const student = link.students;
+          const userInfo = student?.users;
+          const studentId = student?.id;
+          const name = userInfo?.full_name || userInfo?.email || 'Unknown';
+          const initials = name
+            .split(' ')
+            .map((n: string) => n[0])
+            .join('')
+            .toUpperCase()
+            .slice(0, 2);
+
+          // Fetch daily progress for last 7 days
+          const { data: progress } = await supabase
+            .from('daily_progress')
+            .select('study_minutes, quiz_score, date')
+            .eq('student_id', studentId)
+            .gte('date', dateStr)
+            .order('date', { ascending: false });
+
+          const totalMinutes = (progress || []).reduce(
+            (sum: number, p: any) => sum + (p.study_minutes || 0),
+            0
+          );
+          const studyHours = Math.round((totalMinutes / 60) * 10) / 10;
+
+          // Fetch overall progress from study_goals
+          const { data: goals } = await supabase
+            .from('study_goals')
+            .select('progress_pct')
+            .eq('student_id', studentId);
+
+          const avgProgress = goals && goals.length > 0
+            ? Math.round(goals.reduce((sum: number, g: any) => sum + (g.progress_pct || 0), 0) / goals.length)
+            : 0;
+
+          // Determine last active from most recent progress entry
+          let lastActive = 'No data';
+          if (progress && progress.length > 0) {
+            const lastDate = new Date(progress[0].date);
+            const now = new Date();
+            const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays === 0) lastActive = 'Today';
+            else if (diffDays === 1) lastActive = 'Yesterday';
+            else lastActive = `${diffDays} days ago`;
+          }
+
+          // Status logic
+          const status = studyHours >= 7 ? 'On Track' : 'Needs Attention';
+          const statusColor = studyHours >= 7 ? 'success' : 'warning';
+
+          return {
+            id: String(studentId),
+            name,
+            initials,
+            studyHours,
+            progress: avgProgress,
+            lastActive,
+            status,
+            statusColor,
+          };
+        })
+      );
+
+      setChildren(childrenData);
+    } catch (err) {
+      console.error('Error fetching children:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    fetchChildren();
+  }, [fetchChildren]);
+
+  const handleLinkChild = async () => {
+    const code = inviteCode.trim().toUpperCase();
+    if (!code || !user?.id) return;
+
+    setLinking(true);
+    try {
+      // Get parent record
+      const { data: parent, error: parentError } = await supabase
+        .from('parents')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (parentError || !parent) {
+        Alert.alert('Error', 'Parent profile not found.');
+        setLinking(false);
+        return;
+      }
+
+      // Find student by invite code
+      const { data: student, error: studentError } = await supabase
+        .from('students')
+        .select('id')
+        .eq('invite_code', code)
+        .single();
+
+      if (studentError || !student) {
+        Alert.alert('Invalid Code', 'No student found with that invite code.');
+        setLinking(false);
+        return;
+      }
+
+      // Check if link already exists
+      const { data: existing } = await supabase
+        .from('parent_student_links')
+        .select('id')
+        .eq('parent_id', parent.id)
+        .eq('student_id', student.id)
+        .single();
+
+      if (existing) {
+        Alert.alert('Already Linked', 'This child is already linked to your account.');
+        setLinking(false);
+        return;
+      }
+
+      // Create link
+      const { error: insertError } = await supabase
+        .from('parent_student_links')
+        .insert({ parent_id: parent.id, student_id: student.id });
+
+      if (insertError) {
+        Alert.alert('Error', 'Failed to link child. Please try again.');
+        setLinking(false);
+        return;
+      }
+
       setInviteCode('');
       setShowLinkInput(false);
+      await fetchChildren();
+    } catch (err) {
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    } finally {
+      setLinking(false);
     }
   };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.progressText, { marginTop: 12 }]}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.title}>Parent Dashboard</Text>
 
-        {CHILDREN_DATA.map((child) => (
+        {children.length === 0 && !showLinkInput && (
+          <View style={[styles.childCard, { alignItems: 'center', paddingVertical: 32 }]}>
+            <Ionicons name="people-outline" size={48} color={colors.textSecondary} />
+            <Text style={[styles.childName, { marginTop: 12, textAlign: 'center' }]}>
+              No children linked yet
+            </Text>
+            <Text style={[styles.lastActive, { textAlign: 'center', marginTop: 4 }]}>
+              Use an invite code to link your child's account
+            </Text>
+          </View>
+        )}
+
+        {children.map((child) => (
           <TouchableOpacity
             key={child.id}
             style={styles.childCard}
@@ -118,6 +316,8 @@ export default function ParentHome() {
               onChangeText={setInviteCode}
               placeholder="Enter child's invite code"
               placeholderTextColor={colors.textSecondary}
+              autoCapitalize="characters"
+              maxLength={6}
             />
             <View style={styles.linkButtons}>
               <TouchableOpacity
@@ -126,8 +326,16 @@ export default function ParentHome() {
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.linkButton} onPress={handleLinkChild}>
-                <Text style={styles.linkButtonText}>Link</Text>
+              <TouchableOpacity
+                style={[styles.linkButton, { opacity: linking ? 0.6 : 1 }]}
+                onPress={handleLinkChild}
+                disabled={linking}
+              >
+                {linking ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <Text style={styles.linkButtonText}>Link</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>

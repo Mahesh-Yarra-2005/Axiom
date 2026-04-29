@@ -5,60 +5,88 @@ import {
   ScrollView,
   SafeAreaView,
   TouchableOpacity,
+  ActivityIndicator,
+  Alert,
   StyleSheet,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
-
-const VIDEO_DATA: Record<string, any> = {
-  v1: {
-    title: 'Rotational Mechanics Explained',
-    channel: 'Physics Wallah',
-    duration: '32:15',
-  },
-  v2: {
-    title: 'Organic Chemistry — Reaction Mechanisms',
-    channel: 'Unacademy',
-    duration: '45:20',
-  },
-  v3: {
-    title: 'Calculus — Integration by Parts',
-    channel: 'Khan Academy',
-    duration: '28:40',
-  },
-};
-
-const SAMPLE_SUMMARY = {
-  timestamps: [
-    { time: '0:00', label: 'Introduction to Rotational Motion' },
-    { time: '4:30', label: 'Moment of Inertia' },
-    { time: '12:15', label: 'Torque and Angular Acceleration' },
-    { time: '20:00', label: 'Conservation of Angular Momentum' },
-    { time: '28:45', label: 'Solved Examples' },
-  ],
-  concepts: [
-    'Moment of inertia depends on mass distribution relative to axis',
-    'Torque is the rotational equivalent of force (τ = r × F)',
-    'Angular momentum is conserved when net external torque is zero',
-    'Parallel axis theorem: I = I_cm + Md²',
-  ],
-  takeaways: [
-    'Always identify the axis of rotation first',
-    'Use energy conservation for problems involving rolling',
-    'Angular momentum conservation applies to collisions',
-    'Practice problems from HC Verma Chapter 10',
-  ],
-};
+import { callEdgeFunction } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/authStore';
 
 export default function VideoDetail() {
   const { colors } = useThemeStore();
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const [showSummary, setShowSummary] = useState(false);
+  const { id, title, channel, thumbnail } = useLocalSearchParams<{
+    id: string;
+    title: string;
+    channel: string;
+    thumbnail: string;
+  }>();
+  const profile = useAuthStore((s) => s.profile);
 
-  const video = VIDEO_DATA[id || 'v1'] || VIDEO_DATA['v1'];
+  const [summary, setSummary] = useState<string | null>(null);
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
   const styles = makeStyles(colors);
+
+  const videoTitle = title || 'Video';
+  const videoChannel = channel || '';
+
+  const handleSummarize = async () => {
+    setIsSummarizing(true);
+    setSummaryError(null);
+    try {
+      const data = await callEdgeFunction('summarize-video', {
+        video_id: id,
+        video_title: videoTitle,
+      });
+      setSummary(data.summary || 'No summary available.');
+    } catch (err: any) {
+      setSummaryError(err.message || 'Failed to generate summary');
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
+  const handleSaveAsNotes = async () => {
+    if (!summary || !profile?.id) {
+      Alert.alert('Error', 'No summary to save or user not found.');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      // Get student_id from profile
+      const { data: student, error: studentError } = await supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', profile.id)
+        .single();
+
+      if (studentError || !student) {
+        Alert.alert('Error', 'Could not find student profile.');
+        return;
+      }
+
+      const { error } = await supabase.from('notes').insert({
+        student_id: student.id,
+        title: `Video Summary: ${videoTitle}`,
+        content_json: summary,
+        source_type: 'video_summary',
+      });
+
+      if (error) throw error;
+      Alert.alert('Saved', 'Summary saved to your notes.');
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to save notes.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -77,60 +105,65 @@ export default function VideoDetail() {
           <TouchableOpacity style={styles.playButton}>
             <Ionicons name="play" size={48} color={colors.primary} />
           </TouchableOpacity>
-          <Text style={styles.durationBadge}>{video.duration}</Text>
         </View>
 
-        <Text style={styles.videoTitle}>{video.title}</Text>
-        <Text style={styles.videoChannel}>{video.channel}</Text>
+        <Text style={styles.videoTitle}>{videoTitle}</Text>
+        <Text style={styles.videoChannel}>{videoChannel}</Text>
 
         {/* Summarize Button */}
-        <TouchableOpacity
-          style={styles.summarizeButton}
-          onPress={() => setShowSummary(true)}
-        >
-          <Ionicons name="sparkles" size={20} color="#000" />
-          <Text style={styles.summarizeText}>Summarize</Text>
-        </TouchableOpacity>
+        {!summary && !isSummarizing && (
+          <TouchableOpacity
+            style={styles.summarizeButton}
+            onPress={handleSummarize}
+          >
+            <Ionicons name="sparkles" size={20} color="#000" />
+            <Text style={styles.summarizeText}>Summarize</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Loading state */}
+        {isSummarizing && (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.loadingText}>Generating summary...</Text>
+          </View>
+        )}
+
+        {/* Error */}
+        {summaryError && (
+          <View style={styles.errorContainer}>
+            <Ionicons name="alert-circle-outline" size={24} color={colors.error || '#e53e3e'} />
+            <Text style={styles.errorText}>{summaryError}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={handleSummarize}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Summary Section */}
-        {showSummary && (
+        {summary && (
           <View style={styles.summarySection}>
             <View style={styles.summaryHeader}>
               <Ionicons name="sparkles" size={18} color={colors.primary} />
               <Text style={styles.summaryTitle}>AI Summary</Text>
             </View>
 
-            {/* Key Timestamps */}
-            <Text style={styles.subSectionTitle}>Key Timestamps</Text>
-            {SAMPLE_SUMMARY.timestamps.map((ts, index) => (
-              <View key={index} style={styles.timestampRow}>
-                <Text style={styles.timestampTime}>{ts.time}</Text>
-                <Text style={styles.timestampLabel}>{ts.label}</Text>
-              </View>
-            ))}
-
-            {/* Main Concepts */}
-            <Text style={styles.subSectionTitle}>Main Concepts</Text>
-            {SAMPLE_SUMMARY.concepts.map((concept, index) => (
-              <View key={index} style={styles.bulletRow}>
-                <Text style={styles.bullet}>{'\u2022'}</Text>
-                <Text style={styles.bulletText}>{concept}</Text>
-              </View>
-            ))}
-
-            {/* Key Takeaways */}
-            <Text style={styles.subSectionTitle}>Key Takeaways</Text>
-            {SAMPLE_SUMMARY.takeaways.map((takeaway, index) => (
-              <View key={index} style={styles.bulletRow}>
-                <Ionicons name="checkmark-circle" size={16} color={colors.success} />
-                <Text style={styles.bulletText}>{takeaway}</Text>
-              </View>
-            ))}
+            <Text style={styles.summaryBody}>{summary}</Text>
 
             {/* Save as Notes */}
-            <TouchableOpacity style={styles.saveNotesButton}>
-              <Ionicons name="document-text-outline" size={18} color={colors.primary} />
-              <Text style={styles.saveNotesText}>Save as Notes</Text>
+            <TouchableOpacity
+              style={styles.saveNotesButton}
+              onPress={handleSaveAsNotes}
+              disabled={isSaving}
+            >
+              {isSaving ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons name="document-text-outline" size={18} color={colors.primary} />
+              )}
+              <Text style={styles.saveNotesText}>
+                {isSaving ? 'Saving...' : 'Save as Notes'}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -183,18 +216,6 @@ const makeStyles = (colors: any) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    durationBadge: {
-      position: 'absolute',
-      bottom: 10,
-      right: 10,
-      backgroundColor: '#000000CC',
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: 4,
-      color: '#fff',
-      fontSize: 12,
-      fontWeight: '500',
-    },
     videoTitle: {
       fontSize: 20,
       fontWeight: '700',
@@ -224,6 +245,39 @@ const makeStyles = (colors: any) =>
       color: '#000',
       marginLeft: 8,
     },
+    loadingContainer: {
+      alignItems: 'center',
+      paddingVertical: 32,
+    },
+    loadingText: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      marginTop: 12,
+    },
+    errorContainer: {
+      alignItems: 'center',
+      paddingVertical: 20,
+      marginHorizontal: 20,
+    },
+    errorText: {
+      fontSize: 14,
+      color: colors.error || '#e53e3e',
+      marginTop: 8,
+      textAlign: 'center',
+    },
+    retryButton: {
+      marginTop: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.primary,
+    },
+    retryText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.primary,
+    },
     summarySection: {
       margin: 20,
       backgroundColor: colors.card,
@@ -243,43 +297,7 @@ const makeStyles = (colors: any) =>
       color: colors.primary,
       marginLeft: 8,
     },
-    subSectionTitle: {
-      fontSize: 15,
-      fontWeight: '600',
-      color: colors.text,
-      marginTop: 16,
-      marginBottom: 8,
-    },
-    timestampRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 6,
-    },
-    timestampTime: {
-      width: 45,
-      fontSize: 13,
-      fontWeight: '600',
-      color: colors.primary,
-    },
-    timestampLabel: {
-      flex: 1,
-      fontSize: 14,
-      color: colors.text,
-    },
-    bulletRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      marginBottom: 6,
-      paddingLeft: 4,
-    },
-    bullet: {
-      color: colors.primary,
-      fontSize: 16,
-      marginRight: 8,
-      lineHeight: 22,
-    },
-    bulletText: {
-      flex: 1,
+    summaryBody: {
       fontSize: 14,
       color: colors.text,
       lineHeight: 22,
