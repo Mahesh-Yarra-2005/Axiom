@@ -8,11 +8,13 @@ interface AuthState {
   user: User | null;
   role: UserRole | null;
   profile: any | null;
+  studentId: number | null; // Convenience: numeric student ID for queries
   isLoading: boolean;
   isOnboarded: boolean;
   setSession: (session: Session | null) => void;
   setRole: (role: UserRole | null) => void;
   setProfile: (profile: any) => void;
+  setStudentId: (id: number | null) => void;
   setIsOnboarded: (val: boolean) => void;
   setIsLoading: (val: boolean) => void;
   reset: () => void;
@@ -23,12 +25,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   role: null,
   profile: null,
+  studentId: null,
   isLoading: true,
   isOnboarded: false,
   setSession: (session) => set({ session, user: session?.user ?? null }),
   setRole: (role) => set({ role }),
   setProfile: (profile) => set({ profile }),
+  setStudentId: (id) => set({ studentId: id }),
   setIsOnboarded: (val) => set({ isOnboarded: val }),
   setIsLoading: (val) => set({ isLoading: val }),
-  reset: () => set({ session: null, user: null, role: null, profile: null, isLoading: false, isOnboarded: false }),
+  reset: () => set({ session: null, user: null, role: null, profile: null, studentId: null, isLoading: false, isOnboarded: false }),
 }));
