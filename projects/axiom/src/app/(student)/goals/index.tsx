@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,10 +28,86 @@ interface DailyEntry {
 }
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DAYS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+function CalendarPicker({ value, onChange, colors }: {
+  value: Date | null;
+  onChange: (d: Date) => void;
+  colors: any;
+}) {
+  const today = new Date();
+  const [viewYear, setViewYear] = useState(value?.getFullYear() ?? today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(value?.getMonth() ?? today.getMonth());
+
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+  const prevMonth = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
+    else setViewMonth(m => m - 1);
+  };
+  const nextMonth = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
+    else setViewMonth(m => m + 1);
+  };
+
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 16 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <TouchableOpacity onPress={prevMonth} style={{ padding: 8 }}>
+          <Text style={{ color: colors.primary, fontSize: 20, fontWeight: '700' }}>‹</Text>
+        </TouchableOpacity>
+        <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>
+          {MONTHS[viewMonth]} {viewYear}
+        </Text>
+        <TouchableOpacity onPress={nextMonth} style={{ padding: 8 }}>
+          <Text style={{ color: colors.primary, fontSize: 20, fontWeight: '700' }}>›</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+        {DAYS.map(d => (
+          <Text key={d} style={{ flex: 1, textAlign: 'center', color: colors.textSecondary, fontSize: 12, fontWeight: '600' }}>{d}</Text>
+        ))}
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+        {cells.map((day, idx) => {
+          if (!day) return <View key={`e-${idx}`} style={{ width: '14.28%', aspectRatio: 1 }} />;
+          const date = new Date(viewYear, viewMonth, day);
+          const isSelected = value && date.toDateString() === value.toDateString();
+          return (
+            <TouchableOpacity
+              key={day}
+              style={{
+                width: '14.28%',
+                aspectRatio: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+                borderRadius: 100,
+                backgroundColor: isSelected ? colors.primary : 'transparent',
+              }}
+              onPress={() => onChange(date)}
+            >
+              <Text style={{
+                color: isSelected ? '#000' : colors.text,
+                fontSize: 14,
+                fontWeight: isSelected ? '700' : '400',
+              }}>{day}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 export default function GoalsIndex() {
   const { colors } = useThemeStore();
-  const { user } = useAuthStore();
+  const { user, session } = useAuthStore();
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -38,15 +115,25 @@ export default function GoalsIndex() {
   const [weeklyData, setWeeklyData] = useState<{ day: string; hours: number }[]>([]);
   const [daysRemaining, setDaysRemaining] = useState<number | null>(null);
 
+  // Edit form state
+  const [showEditForm, setShowEditForm] = useState(false);
+  const [editExamName, setEditExamName] = useState('');
+  const [editTargetScore, setEditTargetScore] = useState('');
+  const [editTargetDate, setEditTargetDate] = useState<Date | null>(null);
+  const [editProgress, setEditProgress] = useState(0);
+  const [showEditCalendar, setShowEditCalendar] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
   const styles = makeStyles(colors);
 
   const fetchData = useCallback(async () => {
-    if (!user) return;
+    const currentUser = user ?? session?.user;
+    if (!currentUser) return;
 
     const { data: student } = await supabase
       .from('students')
       .select('id')
-      .eq('user_id', user.id)
+      .eq('user_id', currentUser.id)
       .single();
 
     if (!student) {
@@ -104,11 +191,76 @@ export default function GoalsIndex() {
     }
     setWeeklyData(weekly);
     setLoading(false);
-  }, [user]);
+  }, [user, session]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const openEditForm = () => {
+    setEditExamName(goal?.exam_name ?? '');
+    setEditTargetScore(goal?.target_score ?? '');
+    setEditTargetDate(goal?.target_date ? new Date(goal.target_date) : null);
+    setEditProgress(goal?.progress_pct ?? 0);
+    setShowEditForm(true);
+    setShowEditCalendar(false);
+  };
+
+  const handleSaveGoal = async () => {
+    const currentUser = user ?? session?.user;
+    if (!currentUser) return;
+    setIsSaving(true);
+    try {
+      const { data: student } = await supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', currentUser.id)
+        .single();
+
+      if (!student) throw new Error('Student record not found');
+
+      const isoDate = editTargetDate ? editTargetDate.toISOString().split('T')[0] : null;
+
+      // Check if a goal exists
+      const { data: existingGoals } = await supabase
+        .from('study_goals')
+        .select('id')
+        .eq('student_id', student.id)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const goalData = {
+        student_id: student.id,
+        exam_name: editExamName,
+        target_score: editTargetScore || null,
+        target_date: isoDate,
+        progress_pct: editProgress,
+      };
+
+      if (existingGoals && existingGoals.length > 0) {
+        const { error } = await supabase
+          .from('study_goals')
+          .update(goalData)
+          .eq('id', existingGoals[0].id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('study_goals')
+          .insert(goalData);
+        if (error) throw error;
+      }
+
+      setShowEditForm(false);
+      await fetchData();
+    } catch (err: any) {
+      console.error('Failed to save goal:', err.message);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const formatDate = (d: Date) =>
+    `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 
   if (loading) {
     return (
@@ -209,10 +361,102 @@ export default function GoalsIndex() {
         </View>
 
         {/* Update Goal Button */}
-        <TouchableOpacity style={styles.updateButton}>
+        <TouchableOpacity style={styles.updateButton} onPress={openEditForm}>
           <Ionicons name="create-outline" size={20} color="#000" />
           <Text style={styles.updateButtonText}>Update Goal</Text>
         </TouchableOpacity>
+
+        {/* Inline Edit Form */}
+        {showEditForm && (
+          <View style={styles.editForm}>
+            <Text style={styles.editFormTitle}>
+              {goal ? 'Update Goal' : 'Set Goal'}
+            </Text>
+
+            {/* Exam Name */}
+            <Text style={styles.fieldLabel}>Exam Name</Text>
+            <TextInput
+              style={styles.textInput}
+              value={editExamName}
+              onChangeText={setEditExamName}
+              placeholder="e.g. JEE Main 2026"
+              placeholderTextColor={colors.textSecondary}
+            />
+
+            {/* Target Score */}
+            <Text style={styles.fieldLabel}>Target Score</Text>
+            <TextInput
+              style={styles.textInput}
+              value={editTargetScore}
+              onChangeText={setEditTargetScore}
+              placeholder="e.g. 250"
+              placeholderTextColor={colors.textSecondary}
+              keyboardType="default"
+            />
+
+            {/* Target Date */}
+            <Text style={styles.fieldLabel}>Target Date</Text>
+            <TouchableOpacity
+              style={[styles.textInput, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}
+              onPress={() => setShowEditCalendar(v => !v)}
+            >
+              <Text style={{ color: editTargetDate ? colors.text : colors.textSecondary, fontSize: 15 }}>
+                {editTargetDate ? formatDate(editTargetDate) : 'Pick a date'}
+              </Text>
+              <Text style={{ color: colors.primary, fontSize: 18 }}>📅</Text>
+            </TouchableOpacity>
+            {showEditCalendar && (
+              <View style={{ marginTop: 8, marginBottom: 8 }}>
+                <CalendarPicker
+                  value={editTargetDate}
+                  onChange={(d) => { setEditTargetDate(d); setShowEditCalendar(false); }}
+                  colors={colors}
+                />
+              </View>
+            )}
+
+            {/* Progress % */}
+            <Text style={styles.fieldLabel}>Progress: {editProgress}%</Text>
+            <View style={styles.progressControls}>
+              <TouchableOpacity
+                style={styles.progressBtn}
+                onPress={() => setEditProgress(p => Math.max(0, p - 5))}
+              >
+                <Text style={styles.progressBtnText}>−</Text>
+              </TouchableOpacity>
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${editProgress}%` }]} />
+              </View>
+              <TouchableOpacity
+                style={styles.progressBtn}
+                onPress={() => setEditProgress(p => Math.min(100, p + 5))}
+              >
+                <Text style={styles.progressBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Save / Cancel */}
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 20 }}>
+              <TouchableOpacity
+                style={[styles.formButton, { backgroundColor: colors.surface, flex: 1 }]}
+                onPress={() => setShowEditForm(false)}
+              >
+                <Text style={{ color: colors.text, fontWeight: '600', fontSize: 15 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.formButton, { backgroundColor: colors.primary, flex: 1 }]}
+                onPress={handleSaveGoal}
+                disabled={isSaving}
+              >
+                {isSaving ? (
+                  <ActivityIndicator color="#000" size="small" />
+                ) : (
+                  <Text style={{ color: '#000', fontWeight: '700', fontSize: 15 }}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -390,5 +634,75 @@ const makeStyles = (colors: any) =>
       fontWeight: '600',
       color: '#000',
       marginLeft: 8,
+    },
+    editForm: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 20,
+      marginTop: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    editFormTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 16,
+    },
+    fieldLabel: {
+      fontSize: 13,
+      color: colors.textSecondary,
+      marginBottom: 6,
+      marginTop: 12,
+      fontWeight: '500',
+    },
+    textInput: {
+      backgroundColor: colors.surface,
+      borderRadius: 10,
+      padding: 14,
+      fontSize: 15,
+      color: colors.text,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    progressControls: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginTop: 4,
+    },
+    progressBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 8,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    progressBtnText: {
+      fontSize: 20,
+      color: colors.text,
+      fontWeight: '600',
+      lineHeight: 24,
+    },
+    progressTrack: {
+      flex: 1,
+      height: 8,
+      backgroundColor: colors.border,
+      borderRadius: 4,
+      overflow: 'hidden',
+    },
+    progressFill: {
+      height: '100%',
+      backgroundColor: colors.primary,
+      borderRadius: 4,
+    },
+    formButton: {
+      paddingVertical: 14,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
   });

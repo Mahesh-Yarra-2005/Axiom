@@ -59,6 +59,7 @@ export default function StudyPlanScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [plan, setPlan] = useState(PLACEHOLDER_PLAN);
   const [error, setError] = useState<string | null>(null);
+  const [checkedTopics, setCheckedTopics] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -73,8 +74,19 @@ export default function StudyPlanScreen() {
 
         if (cancelled) return;
 
-        if (result?.plan && Array.isArray(result.plan)) {
-          setPlan(result.plan);
+        // Handle both response shapes: { plan: [...] } or { weeks: [...] }
+        const rawWeeks = result?.weeks || result?.plan;
+        if (rawWeeks && Array.isArray(rawWeeks)) {
+          const normalized = rawWeeks.map((w: any) => ({
+            week: w.week,
+            title: w.title || w.theme || `Week ${w.week}`,
+            topics: w.topics
+              ? w.topics
+              : (w.subjects || []).flatMap((s: any) =>
+                  (s.chapters || []).map((c: string) => `${s.name}: ${c}`)
+                ),
+          }));
+          setPlan(normalized);
 
           // Save to study_plans table using correct schema
           const currentUser = user ?? session?.user;
@@ -110,10 +122,36 @@ export default function StudyPlanScreen() {
     return () => { cancelled = true; };
   }, []);
 
+  const toggleTopic = (weekNum: number, topicIdx: number) => {
+    const key = `${weekNum}-${topicIdx}`;
+    setCheckedTopics(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const getWeekCheckedCount = (weekNum: number, topicsLength: number) => {
+    let count = 0;
+    for (let i = 0; i < topicsLength; i++) {
+      if (checkedTopics[`${weekNum}-${i}`]) count++;
+    }
+    return count;
+  };
+
+  const getTotalProgress = () => {
+    let total = 0;
+    let checked = 0;
+    for (const week of plan) {
+      total += week.topics.length;
+      checked += getWeekCheckedCount(week.week, week.topics.length);
+    }
+    if (total === 0) return 0;
+    return Math.round((checked / total) * 100);
+  };
+
   const handleComplete = () => {
     setIsOnboarded(true);
     router.replace('/(student)/(tabs)/home');
   };
+
+  const totalProgress = getTotalProgress();
 
   const styles = StyleSheet.create({
     container: {
@@ -129,11 +167,17 @@ export default function StudyPlanScreen() {
       fontWeight: '700',
       color: colors.text,
       marginTop: 48,
-      marginBottom: 8,
+      marginBottom: 4,
     },
     subtitle: {
       fontSize: 15,
       color: colors.textSecondary,
+      marginBottom: 4,
+    },
+    progressSubtitle: {
+      fontSize: 14,
+      color: colors.primary,
+      fontWeight: '600',
       marginBottom: 24,
     },
     loadingContainer: {
@@ -162,7 +206,6 @@ export default function StudyPlanScreen() {
       marginBottom: 8,
     },
     weekBadge: {
-      backgroundColor: colors.primaryMuted,
       borderRadius: 6,
       paddingHorizontal: 8,
       paddingVertical: 3,
@@ -171,7 +214,6 @@ export default function StudyPlanScreen() {
     weekBadgeText: {
       fontSize: 12,
       fontWeight: '700',
-      color: colors.primary,
     },
     weekTitle: {
       fontSize: 15,
@@ -179,11 +221,24 @@ export default function StudyPlanScreen() {
       color: colors.text,
       flex: 1,
     },
+    topicRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginLeft: 4,
+      marginTop: 6,
+    },
+    checkbox: {
+      width: 18,
+      height: 18,
+      borderRadius: 4,
+      borderWidth: 2,
+      marginRight: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     topicText: {
       fontSize: 13,
-      color: colors.textSecondary,
-      marginLeft: 12,
-      marginTop: 4,
+      flex: 1,
     },
     completeButton: {
       backgroundColor: colors.primary,
@@ -207,6 +262,11 @@ export default function StudyPlanScreen() {
         <Text style={styles.subtitle}>
           Personalized based on your syllabus and target exam
         </Text>
+        {!isLoading && (
+          <Text style={styles.progressSubtitle}>
+            {totalProgress}% complete
+          </Text>
+        )}
 
         {isLoading ? (
           <View style={styles.loadingContainer}>
@@ -222,21 +282,59 @@ export default function StudyPlanScreen() {
                 {error}
               </Text>
             )}
-            {plan.map((week) => (
-              <View key={week.week} style={styles.weekCard}>
-                <View style={styles.weekHeader}>
-                  <View style={styles.weekBadge}>
-                    <Text style={styles.weekBadgeText}>Week {week.week}</Text>
+            {plan.map((week) => {
+              const checkedCount = getWeekCheckedCount(week.week, week.topics.length);
+              const isWeekGold = checkedCount >= Math.ceil(week.topics.length / 2);
+              return (
+                <View key={week.week} style={styles.weekCard}>
+                  <View style={styles.weekHeader}>
+                    <View style={[
+                      styles.weekBadge,
+                      { backgroundColor: isWeekGold ? '#F59E0B' : colors.primaryMuted },
+                    ]}>
+                      <Text style={[
+                        styles.weekBadgeText,
+                        { color: isWeekGold ? '#000' : colors.primary },
+                      ]}>Week {week.week}</Text>
+                    </View>
+                    <Text style={styles.weekTitle}>{week.title}</Text>
                   </View>
-                  <Text style={styles.weekTitle}>{week.title}</Text>
+                  {week.topics.map((topic, idx) => {
+                    const key = `${week.week}-${idx}`;
+                    const isChecked = !!checkedTopics[key];
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={styles.topicRow}
+                        onPress={() => toggleTopic(week.week, idx)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[
+                          styles.checkbox,
+                          {
+                            borderColor: isChecked ? '#F59E0B' : colors.border,
+                            backgroundColor: isChecked ? '#F59E0B' : 'transparent',
+                          },
+                        ]}>
+                          {isChecked && (
+                            <Text style={{ color: '#000', fontSize: 12, fontWeight: '700' }}>✓</Text>
+                          )}
+                        </View>
+                        <Text style={[
+                          styles.topicText,
+                          {
+                            color: isChecked ? colors.textSecondary : colors.text,
+                            textDecorationLine: isChecked ? 'line-through' : 'none',
+                          },
+                        ]}>
+                          {topic}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
-                {week.topics.map((topic, idx) => (
-                  <Text key={idx} style={styles.topicText}>
-                    • {topic}
-                  </Text>
-                ))}
-              </View>
-            ))}
+              );
+            })}
 
             <TouchableOpacity
               style={styles.completeButton}

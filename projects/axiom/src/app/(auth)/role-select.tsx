@@ -26,6 +26,12 @@ const roles = [
     description: "I want to monitor my child's study progress",
     icon: '👨‍👩‍👧',
   },
+  {
+    key: 'teacher',
+    title: 'Teacher',
+    description: 'Publish content, manage students, track progress',
+    icon: '🏫',
+  },
 ];
 
 export default function RoleSelectScreen() {
@@ -66,6 +72,11 @@ export default function RoleSelectScreen() {
         await supabase.from('parents').upsert({
           user_id: currentUser.id,
         });
+      } else if (selectedRole === 'teacher') {
+        const { error: teacherError } = await supabase.from('teachers').upsert({
+          user_id: currentUser.id,
+        });
+        // Don't throw if error - table may not exist yet, still proceed
       }
 
       setRole(selectedRole as any);
@@ -73,6 +84,8 @@ export default function RoleSelectScreen() {
 
       if (selectedRole === 'student') {
         router.replace('/(student)/onboarding/syllabus');
+      } else if (selectedRole === 'teacher') {
+        router.replace('/(teacher)/(tabs)/home');
       } else {
         router.replace('/(parent)/(tabs)/home');
       }

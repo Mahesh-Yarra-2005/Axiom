@@ -94,6 +94,7 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(student)" />
         <Stack.Screen name="(parent)" />
+        <Stack.Screen name="(teacher)" />
       </Stack>
     </ErrorBoundary>
   );

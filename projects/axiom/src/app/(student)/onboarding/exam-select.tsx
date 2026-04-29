@@ -21,7 +21,31 @@ const EXAMS = [
   { id: 'neet', label: 'NEET', icon: '🩺' },
   { id: 'cbse_12', label: 'CBSE Board 12th', icon: '📖' },
   { id: 'cbse_10', label: 'CBSE Board 10th', icon: '📝' },
+  { id: 'college', label: 'College / University', icon: '🎓' },
   { id: 'custom', label: 'Custom', icon: '✏️' },
+];
+
+const COLLEGE_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
+
+const COLLEGE_BRANCHES = [
+  'Computer Science & Engineering',
+  'Electronics & Communication Engineering',
+  'Electrical Engineering',
+  'Mechanical Engineering',
+  'Chemical Engineering',
+  'Civil Engineering',
+  'Mining Engineering',
+  'Metallurgical & Materials Engineering',
+  'Biotechnology',
+  'Biomedical Engineering',
+  'Electronics & Telecommunication Engineering',
+  'Data Science & Artificial Intelligence',
+  'Mathematics & Computing',
+  'Engineering Physics',
+  'Production & Industrial Engineering',
+  'Aerospace Engineering',
+  'Architecture',
+  'Other',
 ];
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -119,6 +143,12 @@ export default function ExamSelectScreen() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  // College-specific state
+  const [selectedYear, setSelectedYear] = useState<string>('');
+  const [selectedBranch, setSelectedBranch] = useState<string>('');
+  const [showYearPicker, setShowYearPicker] = useState(false);
+  const [showBranchPicker, setShowBranchPicker] = useState(false);
+
   const currentUser = user ?? session?.user;
 
   const handleGenerate = async () => {
@@ -131,9 +161,17 @@ export default function ExamSelectScreen() {
       // Convert date to ISO format for Supabase
       const isoDate = selectedDate ? selectedDate.toISOString().split('T')[0] : null;
 
+      const gradeLevel = selectedExam === 'college' && selectedBranch
+        ? `${selectedYear} - ${selectedBranch}`
+        : null;
+
       const { error } = await supabase
         .from('students')
-        .update({ exam_type: selectedExam, target_date: isoDate })
+        .update({
+          exam_type: selectedExam,
+          target_date: isoDate,
+          grade_level: gradeLevel,
+        })
         .eq('user_id', currentUser.id);
       if (error) throw error;
 
@@ -143,6 +181,8 @@ export default function ExamSelectScreen() {
           syllabus_text: syllabus_text || '',
           exam_type: selectedExam,
           target_date: isoDate || '',
+          college_year: selectedYear || '',
+          college_branch: selectedBranch || '',
         },
       });
     } catch (err: any) {
@@ -190,6 +230,142 @@ export default function ExamSelectScreen() {
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* College pickers — shown only when 'college' is selected */}
+        {selectedExam === 'college' && (
+          <View style={{ marginTop: 8, marginBottom: 8 }}>
+            {/* Year picker */}
+            <View style={{ marginBottom: 12 }}>
+              <Text style={{ fontSize: 15, color: colors.textSecondary, marginBottom: 8 }}>
+                Year
+              </Text>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: colors.surface,
+                  borderRadius: 12,
+                  padding: 16,
+                  borderWidth: 1,
+                  borderColor: showYearPicker ? colors.primary : colors.border,
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+                onPress={() => {
+                  setShowYearPicker(v => !v);
+                  setShowBranchPicker(false);
+                }}
+              >
+                <Text style={{ fontSize: 15, color: selectedYear ? colors.text : colors.textSecondary }}>
+                  {selectedYear || 'Select year'}
+                </Text>
+                <Text style={{ color: colors.primary, fontSize: 16 }}>
+                  {showYearPicker ? '▲' : '▼'}
+                </Text>
+              </TouchableOpacity>
+              {showYearPicker && (
+                <View style={{
+                  marginTop: 4,
+                  backgroundColor: colors.card,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  overflow: 'hidden',
+                }}>
+                  {COLLEGE_YEARS.map((year) => (
+                    <TouchableOpacity
+                      key={year}
+                      style={{
+                        padding: 14,
+                        borderBottomWidth: 1,
+                        borderBottomColor: colors.border,
+                        backgroundColor: selectedYear === year ? colors.primary + '20' : 'transparent',
+                      }}
+                      onPress={() => {
+                        setSelectedYear(year);
+                        setShowYearPicker(false);
+                      }}
+                    >
+                      <Text style={{
+                        fontSize: 15,
+                        color: selectedYear === year ? colors.primary : colors.text,
+                        fontWeight: selectedYear === year ? '600' : '400',
+                      }}>
+                        {year}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            {/* Branch picker */}
+            <View style={{ marginBottom: 12 }}>
+              <Text style={{ fontSize: 15, color: colors.textSecondary, marginBottom: 8 }}>
+                Branch
+              </Text>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: colors.surface,
+                  borderRadius: 12,
+                  padding: 16,
+                  borderWidth: 1,
+                  borderColor: showBranchPicker ? colors.primary : colors.border,
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+                onPress={() => {
+                  setShowBranchPicker(v => !v);
+                  setShowYearPicker(false);
+                }}
+              >
+                <Text style={{ fontSize: 15, color: selectedBranch ? colors.text : colors.textSecondary, flex: 1, marginRight: 8 }}>
+                  {selectedBranch || 'Select branch'}
+                </Text>
+                <Text style={{ color: colors.primary, fontSize: 16 }}>
+                  {showBranchPicker ? '▲' : '▼'}
+                </Text>
+              </TouchableOpacity>
+              {showBranchPicker && (
+                <ScrollView
+                  style={{
+                    marginTop: 4,
+                    backgroundColor: colors.card,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    maxHeight: 260,
+                  }}
+                  nestedScrollEnabled
+                >
+                  {COLLEGE_BRANCHES.map((branch, idx) => (
+                    <TouchableOpacity
+                      key={branch}
+                      style={{
+                        padding: 14,
+                        borderBottomWidth: idx < COLLEGE_BRANCHES.length - 1 ? 1 : 0,
+                        borderBottomColor: colors.border,
+                        backgroundColor: selectedBranch === branch ? colors.primary + '20' : 'transparent',
+                      }}
+                      onPress={() => {
+                        setSelectedBranch(branch);
+                        setShowBranchPicker(false);
+                      }}
+                    >
+                      <Text style={{
+                        fontSize: 15,
+                        color: selectedBranch === branch ? colors.primary : colors.text,
+                        fontWeight: selectedBranch === branch ? '600' : '400',
+                      }}>
+                        {branch}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        )}
 
         {/* Date picker */}
         <View style={{ marginTop: 24, marginBottom: 32 }}>
