@@ -9,6 +9,7 @@ import {
   Switch,
   TextInput,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,6 +24,10 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [devOptionsExpanded, setDevOptionsExpanded] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [showTeacherLink, setShowTeacherLink] = useState(false);
+  const [teacherCodeInput, setTeacherCodeInput] = useState('');
+  const [linkingTeacher, setLinkingTeacher] = useState(false);
+  const [linkedTeachers, setLinkedTeachers] = useState<{ name: string; code: string }[]>([]);
   const [studentData, setStudentData] = useState<{
     exam_type: string | null;
     target_date: string | null;
@@ -38,6 +43,28 @@ export default function ProfileScreen() {
         .single()
         .then(({ data }) => {
           if (data) setStudentData(data);
+        });
+
+      // Fetch linked teachers
+      supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', user.id)
+        .single()
+        .then(async ({ data: student }) => {
+          if (!student) return;
+          const { data: links } = await supabase
+            .from('teacher_student_links')
+            .select('teachers ( teacher_code, users ( full_name, email ) )')
+            .eq('student_id', student.id);
+          if (links) {
+            setLinkedTeachers(
+              links.map((l: any) => ({
+                name: l.teachers?.users?.full_name || l.teachers?.users?.email?.split('@')[0] || 'Teacher',
+                code: l.teachers?.teacher_code || '',
+              }))
+            );
+          }
         });
     }
   }, [user?.id]);
@@ -57,6 +84,40 @@ export default function ProfileScreen() {
 
   const handleCopyCode = async () => {
     Alert.alert('Invite Code', inviteCode);
+  };
+
+  const handleLinkTeacher = async () => {
+    const code = teacherCodeInput.trim().toUpperCase();
+    if (!code || !user?.id) return;
+    setLinkingTeacher(true);
+    try {
+      const { data: student } = await supabase
+        .from('students').select('id').eq('user_id', user.id).single();
+      if (!student) throw new Error('Student not found');
+
+      const { data: teacher, error: tErr } = await supabase
+        .from('teachers').select('id, teacher_code, users(full_name,email)').eq('teacher_code', code).single();
+      if (tErr || !teacher) { Alert.alert('Not Found', 'No teacher found with that code.'); return; }
+
+      const { data: existing } = await supabase
+        .from('teacher_student_links').select('id')
+        .eq('teacher_id', teacher.id).eq('student_id', student.id).single();
+      if (existing) { Alert.alert('Already linked', 'You are already in this teacher\'s class.'); return; }
+
+      const { error: insErr } = await supabase
+        .from('teacher_student_links').insert({ teacher_id: teacher.id, student_id: student.id });
+      if (insErr) throw insErr;
+
+      const tName = (teacher as any).users?.full_name || (teacher as any).users?.email?.split('@')[0] || 'Teacher';
+      setLinkedTeachers(prev => [...prev, { name: tName, code: teacher.teacher_code }]);
+      setTeacherCodeInput('');
+      setShowTeacherLink(false);
+      Alert.alert('Linked!', `You've been added to ${tName}'s class.`);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to link teacher');
+    } finally {
+      setLinkingTeacher(false);
+    }
   };
 
   const handleSignOut = async () => {
@@ -295,7 +356,7 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
 
-          {/* Developer Options */}
+        {/* Developer Options */}
           <View style={styles.devSection}>
             <TouchableOpacity
               style={styles.devHeader}
@@ -322,6 +383,59 @@ export default function ProfileScreen() {
               />
             )}
           </View>
+        </View>
+
+        {/* Link Teacher Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>My Teachers</Text>
+          {linkedTeachers.map((t) => (
+            <View key={t.code} style={[styles.settingsItem, { marginBottom: 8 }]}>
+              <View style={styles.settingsItemLeft}>
+                <Ionicons name="school" size={20} color={colors.primary} />
+                <Text style={styles.settingsItemText}>{t.name}</Text>
+              </View>
+              <Text style={{ fontSize: 11, color: colors.textSecondary, fontWeight: '600', letterSpacing: 1 }}>{t.code}</Text>
+            </View>
+          ))}
+          {showTeacherLink ? (
+            <View style={[styles.settingsItem, { flexDirection: 'column', alignItems: 'stretch', gap: 10 }]}>
+              <TextInput
+                style={[styles.devInput, { marginTop: 0 }]}
+                placeholder="Enter teacher code (e.g. AB3X9Z)"
+                placeholderTextColor={colors.textSecondary}
+                value={teacherCodeInput}
+                onChangeText={setTeacherCodeInput}
+                autoCapitalize="characters"
+                maxLength={8}
+              />
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity
+                  style={{ flex: 1, padding: 12, borderRadius: 10, backgroundColor: colors.surface, alignItems: 'center' }}
+                  onPress={() => setShowTeacherLink(false)}
+                >
+                  <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{ flex: 1, padding: 12, borderRadius: 10, backgroundColor: colors.primary, alignItems: 'center' }}
+                  onPress={handleLinkTeacher}
+                  disabled={linkingTeacher}
+                >
+                  {linkingTeacher
+                    ? <ActivityIndicator color="#000" size="small" />
+                    : <Text style={{ color: '#000', fontWeight: '700' }}>Link</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.settingsItem} onPress={() => setShowTeacherLink(true)}>
+              <View style={styles.settingsItemLeft}>
+                <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
+                <Text style={styles.settingsItemText}>Link to Teacher</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Sign Out */}
