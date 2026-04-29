@@ -7,9 +7,13 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useThemeStore } from '@/stores/themeStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/authStore';
 
 const EXAMS = [
   { id: 'jee_main', label: 'JEE Main', icon: '⚡' },
@@ -23,11 +27,34 @@ const EXAMS = [
 export default function ExamSelectScreen() {
   const { colors } = useThemeStore();
   const router = useRouter();
+  const { syllabus_text } = useLocalSearchParams<{ syllabus_text?: string }>();
+  const { user } = useAuthStore();
   const [selectedExam, setSelectedExam] = useState<string | null>(null);
   const [examDate, setExamDate] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleGenerate = () => {
-    router.push('/(student)/onboarding/study-plan');
+  const handleGenerate = async () => {
+    if (!selectedExam || !user) return;
+    setIsSaving(true);
+    try {
+      const { error } = await supabase
+        .from('students')
+        .update({ exam_type: selectedExam, target_date: examDate || null })
+        .eq('user_id', user.id);
+      if (error) throw error;
+      router.push({
+        pathname: '/(student)/onboarding/study-plan',
+        params: {
+          syllabus_text: syllabus_text || '',
+          exam_type: selectedExam,
+          target_date: examDate,
+        },
+      });
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to save exam selection. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const styles = StyleSheet.create({
@@ -104,7 +131,7 @@ export default function ExamSelectScreen() {
       alignItems: 'center',
       marginTop: 32,
       marginBottom: 32,
-      opacity: selectedExam ? 1 : 0.5,
+      opacity: (selectedExam && !isSaving) ? 1 : 0.5,
     },
     generateButtonText: {
       fontSize: 16,
@@ -152,9 +179,13 @@ export default function ExamSelectScreen() {
           style={styles.generateButton}
           onPress={handleGenerate}
           activeOpacity={0.8}
-          disabled={!selectedExam}
+          disabled={!selectedExam || isSaving}
         >
-          <Text style={styles.generateButtonText}>Generate Study Plan</Text>
+          {isSaving ? (
+            <ActivityIndicator color="#000" />
+          ) : (
+            <Text style={styles.generateButtonText}>Generate Study Plan</Text>
+          )}
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

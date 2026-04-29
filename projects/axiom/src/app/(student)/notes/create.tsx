@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,26 +7,76 @@ import {
   TouchableOpacity,
   TextInput,
   StyleSheet,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/authStore';
 
 const SUBJECTS = ['Physics', 'Chemistry', 'Mathematics', 'Biology', 'Other'];
 
 export default function CreateNote() {
   const { colors } = useThemeStore();
   const router = useRouter();
+  const { user } = useAuthStore();
   const [title, setTitle] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('');
   const [chapter, setChapter] = useState('');
   const [content, setContent] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [studentId, setStudentId] = useState<number | null>(null);
 
   const styles = makeStyles(colors);
 
-  const handleSave = () => {
+  useEffect(() => {
+    if (user?.id) {
+      fetchStudentId();
+    }
+  }, [user?.id]);
+
+  const fetchStudentId = async () => {
+    const { data, error } = await supabase
+      .from('students')
+      .select('id')
+      .eq('user_id', user!.id)
+      .single();
+
+    if (error) {
+      Alert.alert('Error', 'Failed to load student profile');
+      return;
+    }
+    setStudentId(data.id);
+  };
+
+  const handleSave = async () => {
     if (!title.trim() || !content.trim()) return;
-    // TODO: Save to Supabase
+    if (!studentId) {
+      Alert.alert('Error', 'Student profile not loaded');
+      return;
+    }
+
+    setSaving(true);
+
+    const { error } = await supabase.from('notes').insert({
+      student_id: studentId,
+      title: title.trim(),
+      content_json: content.trim(),
+      subject: selectedSubject || null,
+      chapter: chapter.trim() || null,
+      source_type: 'manual',
+      tags: [],
+    });
+
+    setSaving(false);
+
+    if (error) {
+      Alert.alert('Error', 'Failed to save note. Please try again.');
+      return;
+    }
+
     router.back();
   };
 
@@ -38,11 +88,15 @@ export default function CreateNote() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>New Note</Text>
         <TouchableOpacity
-          style={[styles.saveButton, { opacity: title.trim() && content.trim() ? 1 : 0.5 }]}
+          style={[styles.saveButton, { opacity: title.trim() && content.trim() && !saving ? 1 : 0.5 }]}
           onPress={handleSave}
-          disabled={!title.trim() || !content.trim()}
+          disabled={!title.trim() || !content.trim() || saving}
         >
-          <Text style={styles.saveButtonText}>Save</Text>
+          {saving ? (
+            <ActivityIndicator size="small" color="#000" />
+          ) : (
+            <Text style={styles.saveButtonText}>Save</Text>
+          )}
         </TouchableOpacity>
       </View>
 

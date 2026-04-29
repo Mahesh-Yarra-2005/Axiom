@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,12 +19,41 @@ import { supabase } from '@/lib/supabase';
 
 export default function ProfileScreen() {
   const { colors, scheme, toggleTheme } = useThemeStore();
-  const { reset } = useAuthStore();
+  const { user, profile, reset } = useAuthStore();
   const router = useRouter();
   const [devOptionsExpanded, setDevOptionsExpanded] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [studentData, setStudentData] = useState<{
+    exam_type: string | null;
+    target_date: string | null;
+    invite_code: string | null;
+  } | null>(null);
 
-  const inviteCode = 'AXM7K2';
+  useEffect(() => {
+    if (user?.id) {
+      supabase
+        .from('students')
+        .select('exam_type, target_date, invite_code')
+        .eq('user_id', user.id)
+        .single()
+        .then(({ data }) => {
+          if (data) setStudentData(data);
+        });
+    }
+  }, [user?.id]);
+
+  const fullName = profile?.full_name || user?.email?.split('@')[0] || 'Student';
+  const initials = fullName
+    .split(' ')
+    .map((n: string) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+  const email = user?.email || '';
+  const examLabel = studentData?.exam_type
+    ? `Target: ${studentData.exam_type}${studentData.target_date ? ` ${new Date(studentData.target_date).getFullYear()}` : ''}`
+    : null;
+  const inviteCode = studentData?.invite_code || '------';
 
   const handleCopyCode = async () => {
     Alert.alert('Invite Code', inviteCode);
@@ -189,11 +218,11 @@ export default function ProfileScreen() {
         {/* Avatar & Info */}
         <View style={styles.avatarContainer}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>AK</Text>
+            <Text style={styles.avatarText}>{initials}</Text>
           </View>
-          <Text style={styles.userName}>Arjun Kumar</Text>
-          <Text style={styles.userEmail}>arjun.kumar@email.com</Text>
-          <Text style={styles.userExam}>Target: JEE Main 2026</Text>
+          <Text style={styles.userName}>{fullName}</Text>
+          <Text style={styles.userEmail}>{email}</Text>
+          {examLabel && <Text style={styles.userExam}>{examLabel}</Text>}
         </View>
 
         {/* Invite Code */}

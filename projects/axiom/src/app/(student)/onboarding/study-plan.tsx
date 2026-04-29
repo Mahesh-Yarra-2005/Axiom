@@ -8,9 +8,11 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useThemeStore } from '@/stores/themeStore';
 import { useAuthStore } from '@/stores/authStore';
+import { callEdgeFunction } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
 const PLACEHOLDER_PLAN = [
   {
@@ -48,12 +50,54 @@ const PLACEHOLDER_PLAN = [
 export default function StudyPlanScreen() {
   const { colors } = useThemeStore();
   const router = useRouter();
-  const { setIsOnboarded } = useAuthStore();
+  const { setIsOnboarded, user } = useAuthStore();
+  const { syllabus_text, exam_type, target_date } = useLocalSearchParams<{
+    syllabus_text?: string;
+    exam_type?: string;
+    target_date?: string;
+  }>();
   const [isLoading, setIsLoading] = useState(true);
+  const [plan, setPlan] = useState(PLACEHOLDER_PLAN);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 2000);
-    return () => clearTimeout(timer);
+    let cancelled = false;
+
+    async function generatePlan() {
+      try {
+        const result = await callEdgeFunction('generate-study-plan', {
+          syllabus_text: syllabus_text || '',
+          exam_type: exam_type || '',
+          target_date: target_date || '',
+        });
+
+        if (cancelled) return;
+
+        if (result?.plan && Array.isArray(result.plan)) {
+          setPlan(result.plan);
+
+          // Save to study_plans table
+          if (user) {
+            await supabase.from('study_plans').insert({
+              user_id: user.id,
+              exam_type: exam_type || null,
+              target_date: target_date || null,
+              plan_data: result.plan,
+            });
+          }
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        console.warn('Failed to generate study plan, using fallback:', err.message);
+        setError('Using a sample plan. You can regenerate later.');
+        setPlan(PLACEHOLDER_PLAN);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    generatePlan();
+    return () => { cancelled = true; };
   }, []);
 
   const handleComplete = () => {
@@ -163,7 +207,12 @@ export default function StudyPlanScreen() {
           </View>
         ) : (
           <>
-            {PLACEHOLDER_PLAN.map((week) => (
+            {error && (
+              <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 12, fontStyle: 'italic' }}>
+                {error}
+              </Text>
+            )}
+            {plan.map((week) => (
               <View key={week.week} style={styles.weekCard}>
                 <View style={styles.weekHeader}>
                   <View style={styles.weekBadge}>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,74 +7,113 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/authStore';
 
 const FILTERS = ['All', 'Physics', 'Chemistry', 'Math', 'Biology'];
-
-const NOTES = [
-  {
-    id: '1',
-    title: 'Newton\'s Laws of Motion',
-    subject: 'Physics',
-    date: 'Apr 28, 2026',
-    preview: 'First law: An object remains at rest or in uniform motion unless acted upon by an external force...',
-  },
-  {
-    id: '2',
-    title: 'Organic Reaction Mechanisms',
-    subject: 'Chemistry',
-    date: 'Apr 26, 2026',
-    preview: 'SN1 and SN2 reactions differ in their mechanism. SN1 proceeds through a carbocation intermediate...',
-  },
-  {
-    id: '3',
-    title: 'Integration Techniques',
-    subject: 'Math',
-    date: 'Apr 25, 2026',
-    preview: 'Integration by parts: integral of u dv = uv - integral of v du. Choose u using LIATE rule...',
-  },
-  {
-    id: '4',
-    title: 'Cell Division — Mitosis & Meiosis',
-    subject: 'Biology',
-    date: 'Apr 23, 2026',
-    preview: 'Mitosis produces two identical daughter cells. The process has four main phases: prophase...',
-  },
-  {
-    id: '5',
-    title: 'Thermodynamics First Law',
-    subject: 'Physics',
-    date: 'Apr 21, 2026',
-    preview: 'The first law of thermodynamics states that energy cannot be created or destroyed, only transformed...',
-  },
-];
 
 const SUBJECT_COLORS: Record<string, string> = {
   Physics: '#4A90D9',
   Chemistry: '#E67E22',
   Math: '#27AE60',
+  Mathematics: '#27AE60',
   Biology: '#8E44AD',
 };
+
+interface Note {
+  id: number;
+  title: string;
+  subject: string | null;
+  chapter: string | null;
+  content_json: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
 
 export default function NotesScreen() {
   const { colors } = useThemeStore();
   const router = useRouter();
+  const { user } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
   const [isGridView, setIsGridView] = useState(true);
 
-  const filteredNotes = NOTES.filter((note) => {
-    const matchesFilter = activeFilter === 'All' || note.subject === activeFilter;
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [studentId, setStudentId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user?.id) {
+      fetchStudentId();
+    }
+  }, [user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (studentId) {
+        fetchNotes();
+      }
+    }, [studentId])
+  );
+
+  const fetchStudentId = async () => {
+    const { data, error } = await supabase
+      .from('students')
+      .select('id')
+      .eq('user_id', user!.id)
+      .single();
+
+    if (error) {
+      setError('Failed to load student profile');
+      setLoading(false);
+      return;
+    }
+    setStudentId(data.id);
+  };
+
+  const fetchNotes = async () => {
+    setLoading(true);
+    setError(null);
+    const { data, error: fetchError } = await supabase
+      .from('notes')
+      .select('*')
+      .eq('student_id', studentId!)
+      .order('created_at', { ascending: false });
+
+    if (fetchError) {
+      setError('Failed to load notes');
+    } else {
+      setNotes(data || []);
+    }
+    setLoading(false);
+  };
+
+  const filteredNotes = notes.filter((note) => {
+    const matchesFilter =
+      activeFilter === 'All' || note.subject === activeFilter;
     const matchesSearch =
       !searchQuery ||
       note.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      note.subject.toLowerCase().includes(searchQuery.toLowerCase());
+      (note.subject || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesFilter && matchesSearch;
   });
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
 
   const styles = StyleSheet.create({
     container: {
@@ -209,32 +248,85 @@ export default function NotesScreen() {
       shadowOpacity: 0.3,
       shadowRadius: 8,
     },
+    loadingContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    emptyContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 40,
+      paddingTop: 60,
+    },
+    emptyText: {
+      fontSize: 16,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginTop: 16,
+      lineHeight: 22,
+    },
+    errorText: {
+      fontSize: 14,
+      color: colors.error || '#E74C3C',
+      textAlign: 'center',
+      padding: 20,
+    },
   });
 
-  const renderNoteCard = (note: typeof NOTES[0], isGrid: boolean) => (
+  const renderNoteCard = (note: Note, isGrid: boolean) => (
     <TouchableOpacity
-      key={note.id}
+      key={note.id.toString()}
       style={isGrid ? styles.noteCardGrid : styles.noteCardList}
       onPress={() => router.push(`/(student)/notes/${note.id}` as any)}
       activeOpacity={0.7}
     >
-      <View
-        style={[
-          styles.noteSubjectBadge,
-          { backgroundColor: SUBJECT_COLORS[note.subject] || colors.primary },
-        ]}
-      >
-        <Text style={styles.noteSubjectText}>{note.subject}</Text>
-      </View>
+      {note.subject && (
+        <View
+          style={[
+            styles.noteSubjectBadge,
+            { backgroundColor: SUBJECT_COLORS[note.subject] || colors.primary },
+          ]}
+        >
+          <Text style={styles.noteSubjectText}>{note.subject}</Text>
+        </View>
+      )}
       <Text style={styles.noteTitle} numberOfLines={2}>
         {note.title}
       </Text>
-      <Text style={styles.noteDate}>{note.date}</Text>
-      <Text style={styles.notePreview} numberOfLines={2}>
-        {note.preview}
-      </Text>
+      <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
+      {note.content_json && (
+        <Text style={styles.notePreview} numberOfLines={2}>
+          {note.content_json.substring(0, 120)}
+        </Text>
+      )}
     </TouchableOpacity>
   );
+
+  const renderEmpty = () => (
+    <View style={styles.emptyContainer}>
+      <Ionicons name="document-text-outline" size={48} color={colors.textSecondary} />
+      <Text style={styles.emptyText}>
+        No notes yet. Create your first note!
+      </Text>
+    </View>
+  );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <View style={styles.headerRow}>
+            <Text style={styles.headerTitle}>My Notes</Text>
+          </View>
+        </View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -264,6 +356,8 @@ export default function NotesScreen() {
         </View>
       </View>
 
+      {error && <Text style={styles.errorText}>{error}</Text>}
+
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -291,24 +385,28 @@ export default function NotesScreen() {
         ))}
       </ScrollView>
 
-      <ScrollView contentContainerStyle={isGridView ? styles.gridContent : styles.listContent}>
-        {isGridView ? (
-          <View style={styles.gridRow}>
-            <View style={{ width: '48%' }}>
-              {filteredNotes
-                .filter((_, i) => i % 2 === 0)
-                .map((note) => renderNoteCard(note, true))}
+      {filteredNotes.length === 0 ? (
+        renderEmpty()
+      ) : (
+        <ScrollView contentContainerStyle={isGridView ? styles.gridContent : styles.listContent}>
+          {isGridView ? (
+            <View style={styles.gridRow}>
+              <View style={{ width: '48%' }}>
+                {filteredNotes
+                  .filter((_, i) => i % 2 === 0)
+                  .map((note) => renderNoteCard(note, true))}
+              </View>
+              <View style={{ width: '48%' }}>
+                {filteredNotes
+                  .filter((_, i) => i % 2 === 1)
+                  .map((note) => renderNoteCard(note, true))}
+              </View>
             </View>
-            <View style={{ width: '48%' }}>
-              {filteredNotes
-                .filter((_, i) => i % 2 === 1)
-                .map((note) => renderNoteCard(note, true))}
-            </View>
-          </View>
-        ) : (
-          filteredNotes.map((note) => renderNoteCard(note, false))
-        )}
-      </ScrollView>
+          ) : (
+            filteredNotes.map((note) => renderNoteCard(note, false))
+          )}
+        </ScrollView>
+      )}
 
       <TouchableOpacity
         style={styles.fab}

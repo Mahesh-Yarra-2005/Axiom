@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,8 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { useAuthStore } from '@/stores/authStore';
+import { supabase } from '@/lib/supabase';
 
 const FOCUS_TOPICS = [
   { id: '1', title: 'Newton\'s Third Law — Problems', done: false },
@@ -33,7 +35,58 @@ const MILESTONES = [
 
 export default function HomeScreen() {
   const { colors } = useThemeStore();
+  const { user, profile } = useAuthStore();
   const router = useRouter();
+
+  const [milestones, setMilestones] = useState(MILESTONES);
+  const [progressPct, setProgressPct] = useState(0);
+
+  const firstName = profile?.full_name
+    ? profile.full_name.split(' ')[0]
+    : user?.email?.split('@')[0] || 'Student';
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // Fetch study plan milestones
+    supabase
+      .from('students')
+      .select('id')
+      .eq('user_id', user.id)
+      .single()
+      .then(({ data: student }) => {
+        if (!student) return;
+
+        // Fetch active study plan milestones
+        supabase
+          .from('study_plans')
+          .select('milestones')
+          .eq('student_id', student.id)
+          .eq('status', 'active')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single()
+          .then(({ data: plan }) => {
+            if (plan?.milestones && Array.isArray(plan.milestones) && plan.milestones.length > 0) {
+              setMilestones(plan.milestones);
+            }
+          });
+
+        // Fetch progress from study_goals
+        supabase
+          .from('study_goals')
+          .select('progress_pct')
+          .eq('student_id', student.id)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .single()
+          .then(({ data: goal }) => {
+            if (goal?.progress_pct != null) {
+              setProgressPct(Math.round(goal.progress_pct));
+            }
+          });
+      });
+  }, [user?.id]);
 
   const today = new Date();
   const dateString = today.toLocaleDateString('en-IN', {
@@ -170,7 +223,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.greeting}>Hello, Arjun</Text>
+        <Text style={styles.greeting}>Hello, {firstName}</Text>
         <Text style={styles.date}>{dateString}</Text>
 
         {/* Today's Focus */}
@@ -196,9 +249,11 @@ export default function HomeScreen() {
         {/* Progress */}
         <View style={styles.progressCard}>
           <View style={styles.progressCircle}>
-            <Text style={styles.progressText}>65%</Text>
+            <Text style={styles.progressText}>{progressPct}%</Text>
           </View>
-          <Text style={styles.progressLabel}>Overall Progress</Text>
+          <Text style={styles.progressLabel}>
+            {progressPct > 0 ? 'Overall Progress' : 'Start studying to track progress'}
+          </Text>
         </View>
 
         {/* Quick Actions */}
@@ -224,7 +279,7 @@ export default function HomeScreen() {
 
         {/* Study Plan */}
         <Text style={styles.sectionTitle}>This Week's Plan</Text>
-        {MILESTONES.map((item) => (
+        {milestones.map((item: any) => (
           <View key={item.id} style={styles.milestoneItem}>
             <Ionicons
               name={item.done ? 'checkmark-circle' : 'ellipse-outline'}

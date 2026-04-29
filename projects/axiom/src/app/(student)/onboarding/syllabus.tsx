@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,6 @@ export default function SyllabusScreen() {
   const router = useRouter();
   const [fileName, setFileName] = useState<string | null>(null);
   const [syllabusText, setSyllabusText] = useState('');
-  const syllabusRef = useRef('');
 
   const pickDocument = async () => {
     try {
@@ -34,8 +33,11 @@ export default function SyllabusScreen() {
   };
 
   const handleContinue = () => {
-    syllabusRef.current = syllabusText;
-    router.push('/(student)/onboarding/exam-select');
+    const textToPass = syllabusText.trim() || (fileName ? `[Uploaded file: ${fileName}]` : '');
+    router.push({
+      pathname: '/(student)/onboarding/exam-select',
+      params: { syllabus_text: textToPass },
+    });
   };
 
   const styles = StyleSheet.create({

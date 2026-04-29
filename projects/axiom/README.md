@@ -1,56 +1,73 @@
-# Welcome to your Expo app 👋
+# Axiom - AI Study Assistant
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A comprehensive study assistant app for JEE, NEET, and CBSE Board students. Built with Expo (React Native), Supabase, and Groq AI.
 
-## Get started
+## Quick Setup
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
+### 1. Install Dependencies
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### 2. Create Supabase Project
+1. Go to [supabase.com](https://supabase.com) and create a free project
+2. Go to **SQL Editor** and run the contents of `supabase/migrations/001_initial_schema.sql`
+3. Copy your project URL and anon key from **Settings > API**
 
-### Other setup steps
+### 3. Configure Environment
+```bash
+cp .env.example .env
+```
+Edit `.env` with your Supabase URL and anon key.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+### 4. Get API Keys
+- **Groq** (required for AI chat): [console.groq.com](https://console.groq.com) - Create API key (free)
+- **YouTube Data API** (optional): [Google Cloud Console](https://console.cloud.google.com) - Enable YouTube Data API v3
 
-## Learn more
+### 5. Deploy Edge Functions
+```bash
+# Install Supabase CLI
+npm install -g supabase
 
-To learn more about developing your project with Expo, look at the following resources:
+# Login and link
+supabase login
+supabase link --project-ref YOUR_PROJECT_REF
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+# Set secrets
+supabase secrets set GROQ_API_KEY=your-key
+supabase secrets set YOUTUBE_API_KEY=your-key
+supabase secrets set SUPABASE_URL=https://your-project.supabase.co
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
-## Join the community
+# Deploy all functions
+supabase functions deploy chat
+supabase functions deploy summarize-video
+supabase functions deploy search-videos
+supabase functions deploy generate-study-plan
+```
 
-Join our community of developers creating universal apps.
+### 6. Run the App
+```bash
+npx expo start
+```
+Scan the QR code with Expo Go on your Android device.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+### 7. Build APK
+```bash
+npx eas build --platform android --profile preview
+```
+
+## Tech Stack
+- **Frontend:** Expo SDK 55, React Native, Expo Router, Zustand
+- **Backend:** Supabase (Auth, PostgreSQL, Edge Functions, Storage)
+- **AI:** Groq (Llama 3.3 70B) for chat, study plans, video summaries
+- **Video:** YouTube Data API v3
+
+## Features
+- AI-powered STEM tutor with streaming chat
+- Personalized study plan generation
+- Notes system with export from chat
+- YouTube video search and AI summarization
+- Flashcards with SM-2 spaced repetition
+- Parent dashboard with child progress tracking
+- Dark/Light theme support

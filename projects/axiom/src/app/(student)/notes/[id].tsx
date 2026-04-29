@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,49 +6,25 @@ import {
   SafeAreaView,
   TouchableOpacity,
   StyleSheet,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '@/stores/themeStore';
+import { supabase } from '@/lib/supabase';
 
-const SAMPLE_NOTE = {
-  id: '1',
-  title: 'Newton\'s Laws of Motion',
-  subject: 'Physics',
-  chapter: 'Mechanics',
-  source: 'Chat Export',
-  createdAt: '2025-01-15',
-  content: `# Newton's Laws of Motion
-
-## First Law (Law of Inertia)
-An object at rest stays at rest, and an object in motion stays in motion with the same speed and in the same direction, unless acted upon by an unbalanced force.
-
-**Key Points:**
-- Inertia is the tendency of an object to resist changes in its state of motion
-- Mass is a measure of inertia
-- The greater the mass, the greater the inertia
-
-## Second Law (F = ma)
-The acceleration of an object depends on the net force acting on it and the mass of the object.
-
-**Formula:** F = ma
-- F = Force (Newtons)
-- m = mass (kg)
-- a = acceleration (m/s²)
-
-## Third Law (Action-Reaction)
-For every action, there is an equal and opposite reaction.
-
-**Examples:**
-- Walking: foot pushes ground backward, ground pushes foot forward
-- Rocket propulsion: exhaust gases push downward, rocket moves upward
-- Swimming: hands push water backward, body moves forward
-
-## Important Formulas
-- Momentum: p = mv
-- Impulse: J = FΔt = Δp
-- Weight: W = mg (g = 9.8 m/s²)`,
-};
+interface NoteData {
+  id: number;
+  title: string;
+  subject: string | null;
+  chapter: string | null;
+  content_json: string | null;
+  source_type: string | null;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
 
 function renderFormattedText(content: string, colors: any) {
   const lines = content.split('\n');
@@ -96,13 +72,98 @@ function renderFormattedText(content: string, colors: any) {
   });
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  manual: 'Manual',
+  chat_export: 'Chat Export',
+  video_summary: 'Video Summary',
+};
+
 export default function NoteDetail() {
   const { colors } = useThemeStore();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
 
-  const note = SAMPLE_NOTE;
+  const [note, setNote] = useState<NoteData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const styles = makeStyles(colors);
+
+  useEffect(() => {
+    if (id) {
+      fetchNote();
+    }
+  }, [id]);
+
+  const fetchNote = async () => {
+    setLoading(true);
+    setError(null);
+
+    const { data, error: fetchError } = await supabase
+      .from('notes')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError) {
+      setError('Failed to load note');
+    } else {
+      setNote(data);
+    }
+    setLoading(false);
+  };
+
+  const handleDelete = () => {
+    Alert.alert('Delete Note', 'Are you sure you want to delete this note?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await supabase.from('notes').delete().eq('id', id);
+          if (error) {
+            Alert.alert('Error', 'Failed to delete note');
+            return;
+          }
+          router.back();
+        },
+      },
+    ]);
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Loading...</Text>
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error || !note) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Error</Text>
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <Text style={{ color: colors.error || '#E74C3C', fontSize: 16, textAlign: 'center' }}>
+            {error || 'Note not found'}
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -120,25 +181,38 @@ export default function NoteDetail() {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.badges}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{note.subject}</Text>
-          </View>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{note.chapter}</Text>
-          </View>
-          <View style={[styles.badge, styles.sourceBadge]}>
-            <Ionicons name="document-text-outline" size={12} color={colors.primary} />
-            <Text style={[styles.badgeText, { marginLeft: 4 }]}>{note.source}</Text>
-          </View>
+          {note.subject && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{note.subject}</Text>
+            </View>
+          )}
+          {note.chapter && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{note.chapter}</Text>
+            </View>
+          )}
+          {note.source_type && (
+            <View style={[styles.badge, styles.sourceBadge]}>
+              <Ionicons name="document-text-outline" size={12} color={colors.primary} />
+              <Text style={[styles.badgeText, { marginLeft: 4 }]}>
+                {SOURCE_LABELS[note.source_type] || note.source_type}
+              </Text>
+            </View>
+          )}
         </View>
 
-        <Text style={styles.date}>Created: {note.createdAt}</Text>
+        <Text style={styles.date}>
+          Created: {new Date(note.created_at).toLocaleDateString()}
+        </Text>
 
         <View style={styles.contentSection}>
-          {renderFormattedText(note.content, colors)}
+          {note.content_json
+            ? renderFormattedText(note.content_json, colors)
+            : <Text style={{ color: colors.textSecondary }}>No content</Text>
+          }
         </View>
 
-        <TouchableOpacity style={styles.deleteButton}>
+        <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
           <Ionicons name="trash-outline" size={20} color={colors.error} />
           <Text style={styles.deleteText}>Delete Note</Text>
         </TouchableOpacity>
