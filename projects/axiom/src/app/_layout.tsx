@@ -5,10 +5,15 @@ import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { supabase } from '@/lib/supabase';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 export default function RootLayout() {
   const { setSession, setRole, setProfile, setIsLoading, setIsOnboarded, isLoading } = useAuthStore();
-  const { colors, scheme } = useThemeStore();
+  const { colors, scheme, loadSavedTheme } = useThemeStore();
+
+  useEffect(() => {
+    loadSavedTheme();
+  }, []);
 
   useEffect(() => {
     // Check initial session
@@ -76,7 +81,7 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <ErrorBoundary>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
@@ -90,7 +95,7 @@ export default function RootLayout() {
         <Stack.Screen name="(student)" />
         <Stack.Screen name="(parent)" />
       </Stack>
-    </>
+    </ErrorBoundary>
   );
 }
 
