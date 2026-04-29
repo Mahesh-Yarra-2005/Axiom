@@ -313,7 +313,7 @@ export default function ChatDetailScreen() {
                 Ask me anything
               </Text>
               <Text style={[styles.emptyChatDesc, { color: colors.textSecondary }]}>
-                I'm your AI study companion for JEE, NEET, and CBSE
+                I'm your AI study companion. Every answer is tagged with Bloom's level to build deep understanding.
               </Text>
             </View>
           }
