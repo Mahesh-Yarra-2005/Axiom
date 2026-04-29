@@ -87,8 +87,95 @@ Deno.serve(async (req: Request) => {
       return errorResponse(`AI service error: ${response.status}`, 502);
     }
 
-    // Forward the SSE stream
-    return new Response(response.body, {
+    // Create a TransformStream to intercept the Groq stream, accumulate full text,
+    // then append Bloom's classification before finishing.
+    const encoder = new TextEncoder();
+    let fullText = '';
+
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+
+    // Process the stream in the background
+    (async () => {
+      try {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+
+          // Accumulate text content for classification
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6).trim();
+              if (data === '[DONE]') continue;
+              try {
+                const parsed = JSON.parse(data);
+                const content = parsed.choices?.[0]?.delta?.content || '';
+                if (content) fullText += content;
+              } catch { /* skip non-JSON lines */ }
+            }
+          }
+
+          // Forward the original chunk as-is to client
+          await writer.write(value);
+        }
+
+        // After all streaming chunks are sent, classify Bloom's level
+        try {
+          const classifyRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'llama-3.3-70b-versatile',
+              messages: [
+                {
+                  role: 'system',
+                  content: `Classify this AI tutor response into ONE Bloom's Taxonomy level.
+Return ONLY JSON: {"level": "Remember|Understand|Apply|Analyze|Evaluate|Create", "reason": "one sentence"}
+- Remember: recalling facts, definitions, formulas
+- Understand: explaining, summarizing, interpreting
+- Apply: solving problems, using formulas
+- Analyze: comparing, breaking down, finding patterns
+- Evaluate: justifying, critiquing, assessing
+- Create: designing, proposing, combining ideas`,
+                },
+                { role: 'user', content: `Classify this response:\n\n${fullText.slice(0, 1000)}` },
+              ],
+              temperature: 0.1,
+              max_tokens: 80,
+              response_format: { type: 'json_object' },
+            }),
+          });
+
+          if (classifyRes.ok) {
+            const classifyData = await classifyRes.json();
+            const classified = JSON.parse(classifyData.choices[0].message.content);
+            // Emit special metadata SSE event
+            await writer.write(
+              encoder.encode(
+                `data: {"type":"blooms_metadata","level":"${classified.level}","reason":"${(classified.reason || '').replace(/"/g, '')}"}\n\n`,
+              ),
+            );
+          }
+        } catch (classifyErr) {
+          console.error('Bloom classification error (non-fatal):', classifyErr);
+        }
+
+        // Emit [DONE] terminator
+        await writer.write(encoder.encode('data: [DONE]\n\n'));
+      } catch (streamErr) {
+        console.error('Stream processing error:', streamErr);
+      } finally {
+        writer.close();
+      }
+    })();
+
+    return new Response(readable, {
       headers: {
         ...corsHeaders,
         'Content-Type': 'text/event-stream',
