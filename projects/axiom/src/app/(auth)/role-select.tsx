@@ -30,20 +30,28 @@ const roles = [
 
 export default function RoleSelectScreen() {
   const { colors } = useThemeStore();
-  const { user, setRole, setProfile } = useAuthStore();
+  const { user, session, setRole, setProfile } = useAuthStore();
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleContinue() {
-    if (!selectedRole || !user) return;
+    const currentUser = user ?? session?.user;
+    if (!selectedRole) {
+      Alert.alert('Select a role', 'Please choose Student or Parent to continue.');
+      return;
+    }
+    if (!currentUser) {
+      Alert.alert('Session error', 'Please go back and log in again.');
+      return;
+    }
 
     setLoading(true);
     try {
       // Create user profile
       const { error: userError } = await supabase.from('users').upsert({
-        id: user.id,
-        email: user.email || '',
-        full_name: user.user_metadata?.full_name || '',
+        id: currentUser.id,
+        email: currentUser.email || '',
+        full_name: currentUser.user_metadata?.full_name || '',
         role: selectedRole,
       });
 
@@ -52,16 +60,16 @@ export default function RoleSelectScreen() {
       // Create role-specific profile
       if (selectedRole === 'student') {
         await supabase.from('students').upsert({
-          user_id: user.id,
+          user_id: currentUser.id,
         });
       } else if (selectedRole === 'parent') {
         await supabase.from('parents').upsert({
-          user_id: user.id,
+          user_id: currentUser.id,
         });
       }
 
       setRole(selectedRole as any);
-      setProfile({ id: user.id, email: user.email, role: selectedRole });
+      setProfile({ id: currentUser.id, email: currentUser.email, role: selectedRole });
 
       if (selectedRole === 'student') {
         router.replace('/(student)/onboarding/syllabus');
